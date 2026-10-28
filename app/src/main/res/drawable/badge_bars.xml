@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 声波角标：三根竖条，供 badge_playing.xml 做属性动画 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="15dp"
+    android:height="14dp"
+    android:viewportWidth="15"
+    android:viewportHeight="14">
+
+    <group
+        android:name="bar1"
+        android:pivotX="1.5"
+        android:pivotY="7">
+        <path
+            android:fillColor="#DE0E0E10"
+            android:pathData="M0,0L3,0L3,14L0,14Z" />
+    </group>
+
+    <group
+        android:name="bar2"
+        android:pivotX="7.5"
+        android:pivotY="7">
+        <path
+            android:fillColor="#DE0E0E10"
+            android:pathData="M6,0L9,0L9,14L6,14Z" />
+    </group>
+
+    <group
+        android:name="bar3"
+        android:pivotX="13.5"
+        android:pivotY="7">
+        <path
+            android:fillColor="#DE0E0E10"
+            android:pathData="M12,0L15,0L15,14L12,14Z" />
+    </group>
+</vector>

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  播放中角标动画：动画挂在 drawable 上，随 View 附着/隐藏自动启停，
+  不需要全局 animator 列表，也就不会出现重建别的分组面板时把当前角标冻住
+-->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:drawable="@drawable/badge_bars">
+
+    <target android:name="bar1">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="420"
+                android:interpolator="@android:anim/accelerate_decelerate_interpolator"
+                android:propertyName="scaleY"
+                android:repeatCount="infinite"
+                android:repeatMode="reverse"
+                android:startOffset="0"
+                android:valueFrom="0.25"
+                android:valueTo="1"
+                android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+
+    <target android:name="bar2">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="420"
+                android:interpolator="@android:anim/accelerate_decelerate_interpolator"
+                android:propertyName="scaleY"
+                android:repeatCount="infinite"
+                android:repeatMode="reverse"
+                android:startOffset="140"
+                android:valueFrom="0.25"
+                android:valueTo="1"
+                android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+
+    <target android:name="bar3">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="420"
+                android:interpolator="@android:anim/accelerate_decelerate_interpolator"
+                android:propertyName="scaleY"
+                android:repeatCount="infinite"
+                android:repeatMode="reverse"
+                android:startOffset="280"
+                android:valueFrom="0.25"
+                android:valueTo="1"
+                android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+</animated-vector>

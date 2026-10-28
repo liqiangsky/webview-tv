@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/panelRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#80000000"
+    android:clipChildren="false"
+    android:clickable="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="true"
+        android:orientation="horizontal">
+
+        <!-- 左：在播/焦点频道的信息展示区（约 20%），不参与焦点 -->
+        <include
+            layout="@layout/panel_info"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginTop="24dp"
+            android:layout_marginEnd="10dp"
+            android:layout_marginBottom="24dp"
+            android:layout_weight="28" />
+
+        <!-- 右：Coverflow 分组切换，正中大面板居中，两侧分组面板透出边缘 -->
+        <com.tvlive.web.CoverflowScrollView
+            android:id="@+id/groupScroll"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="72"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/groupRow"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:clipChildren="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal" />
+        </com.tvlive.web.CoverflowScrollView>
+    </LinearLayout>
+</FrameLayout>

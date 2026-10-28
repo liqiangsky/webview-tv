@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV 横幅：320x180dp -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="320dp"
+        android:height="180dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="45"
+                android:endColor="@color/banner_end"
+                android:startColor="@color/banner_start" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item
+        android:width="96dp"
+        android:height="96dp"
+        android:drawable="@drawable/ic_tv_glyph"
+        android:gravity="center" />
+</layer-list>
