@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14151a">
+<title>电视配置</title>
+<style>
+  /* tvOS 视觉语言：纯黑底、SF 字体、圆角分组列表 + 发丝分隔线、
+     交互件用系统蓝文字而非色块，主操作是白色胶囊，按下靠缩放和透明度反馈 */
+  :root {
+    --bg: #000; --card: #1c1c1e; --card2: #2c2c2e; --card3: #3a3a3c;
+    --sep: rgba(84, 84, 88, .42);
+    --fg: #fff; --dim: #8e8e93; --dim2: #aeaeb2;
+    --accent: #0a84ff; --danger: #ff453a;
+    --fill: rgba(120, 120, 128, .32);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 0 0 92px; background: var(--bg); color: var(--fg);
+    font: 17px/1.45 -apple-system, "SF Pro Display", "SF Pro Text",
+          "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    letter-spacing: -0.012em;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { position: sticky; top: 0; z-index: 5; background: rgba(0,0,0,.88);
+    -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+    padding: 18px 20px 0; }
+  .title { display: flex; align-items: baseline; gap: 10px; }
+  .title h1 { margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.026em; }
+  .title .dev { color: var(--dim); font-size: 13px; font-weight: 400; }
+  /* tvOS 顶部菜单：选中项提亮放大，未选中压暗，不用边框和底色 */
+  .tabs { display: flex; gap: 26px; margin-top: 16px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--sep); }
+  .tab { font-size: 16px; color: var(--dim); font-weight: 600; padding: 4px 0;
+    transition: color .18s, transform .18s; }
+  .tab.on { color: var(--fg); font-size: 17px; transform: translateZ(0); }
+  main { padding: 18px 16px 0; }
+  /* 圆角分组列表：整组一块底色，组内行用发丝线分隔（Apple inset grouped） */
+  .group { background: var(--card); border-radius: 16px; overflow: hidden; margin-bottom: 18px; }
+  .ghead { display: flex; align-items: center; gap: 8px; padding: 11px 16px;
+    font-size: 12px; color: var(--dim); text-transform: none; letter-spacing: 0;
+    border-bottom: 1px solid var(--sep); background: var(--card2); }
+  .ghead b { color: var(--fg); font-size: 15px; font-weight: 600; }
+  .ghead .sp { flex: 1; }
+  .mini { background: none; border: 0; color: var(--dim2); padding: 4px 2px;
+    font-size: 14px; font-family: inherit; }
+  .mini:active { opacity: .45; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 13px 16px;
+    border-bottom: 1px solid var(--sep); transition: background .12s; }
+  .group .row:last-child { border-bottom: 0; }
+  .row:active { background: var(--card3); }
+  .row.playing { background: var(--card2); }
+  .row .nm { font-size: 17px; font-weight: 400; }
+  .row .u { font-size: 12px; color: var(--dim); word-break: break-all; margin-top: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0; }
+  .row .txt { flex: 1; min-width: 0; }
+  /* 次级信息胶囊：tvOS 用灰底小标签标注清晰度一类元数据 */
+  .q { display: inline-block; font-size: 11px; font-weight: 600; color: #ebebf5;
+    background: var(--fill); border-radius: 5px; padding: 1px 6px; margin-left: 7px;
+    vertical-align: 1px; letter-spacing: .01em; }
+  .row.playing .q { color: #000; background: var(--fg); }
+  .act { display: flex; align-items: center; gap: 18px; }
+  /* 操作一律做成系统蓝文字按钮，只有主操作是白色胶囊 */
+  .btn { background: none; border: 0; color: var(--accent); font-size: 17px;
+    font-family: inherit; padding: 6px 2px; transition: opacity .12s, transform .12s; }
+  .btn:active { opacity: .45; transform: scale(.96); }
+  .btn.pri { background: var(--fg); color: #000; font-weight: 600;
+    border-radius: 980px; padding: 11px 20px; }
+  .btn.pri:active { opacity: .8; transform: scale(.98); }
+  .btn.del { color: var(--danger); }
+  .empty { color: var(--dim); text-align: center; padding: 54px 24px; line-height: 1.8;
+    font-size: 15px; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 12px;
+    align-items: center; padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+    background: rgba(0,0,0,.9); -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px); border-top: 1px solid var(--sep); }
+  fieldset { background: var(--card); border: 0; border-radius: 16px; margin: 0 0 18px;
+    padding: 16px; }
+  legend { color: var(--dim); font-size: 13px; padding: 0; margin-bottom: 10px; }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 14px 0 6px; }
+  label:first-of-type { margin-top: 0; }
+  input, textarea, select { width: 100%; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--card3); border-radius: 11px; padding: 12px 13px; font-size: 17px;
+    font-family: inherit; letter-spacing: -0.012em; }
+  textarea { min-height: 170px; font-family: ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace; font-size: 13px; line-height: 1.6; letter-spacing: 0; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .seg { display: flex; gap: 10px; margin-top: 12px; }
+  .seg label { flex: 1; margin: 0; color: var(--fg); font-size: 15px; display: flex;
+    gap: 8px; align-items: center; }
+  .seg input { width: auto; accent-color: var(--accent); }
+  /* 弹层：从底部升起的圆角面板，遮罩压暗 */
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.66); z-index: 20;
+    display: flex; align-items: flex-end; justify-content: center; }
+  .sheet { width: 100%; max-width: 600px; background: var(--card);
+    border-radius: 20px 20px 0 0; padding: 22px 18px calc(20px + env(safe-area-inset-bottom));
+    max-height: 88vh; overflow: auto; }
+  .sheet h2 { margin: 0 0 18px; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+  .sheet .row2 { display: flex; gap: 12px; margin-top: 22px; }
+  .sheet .row2 .btn { flex: 1; text-align: center; }
+  #toast { position: fixed; left: 50%; bottom: 108px; transform: translateX(-50%);
+    background: rgba(44,44,46,.96); color: #fff; padding: 11px 18px; border-radius: 980px;
+    font-size: 15px; opacity: 0; transition: opacity .22s; pointer-events: none; z-index: 30;
+    max-width: 90vw; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  #toast.on { opacity: 1; }
+  #toast.bad { background: rgba(255,69,58,.96); color: #fff; }
+  .hint { color: var(--dim); font-size: 13px; line-height: 1.65; margin: 10px 4px 0; }
+  .pinrow { display: flex; align-items: center; gap: 10px; font-size: 13px;
+    color: var(--dim); margin-top: 10px; }
+  .pinrow b { color: var(--fg); font-size: 17px; letter-spacing: .18em; font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">
+    <h1>电视配置</h1><span class="dev" id="dev"></span>
+  </div>
+  <div class="pinrow">配对码 <b id="pinShow">----</b>
+    <button class="mini" id="regen">换一组</button><span class="sp"></span></div>
+  <div class="tabs">
+    <div class="tab on" data-v="ch">频道</div>
+    <div class="tab" data-v="login">登录网址</div>
+    <div class="tab" data-v="imp">导入</div>
+  </div>
+</header>
+
+<main>
+  <div id="v-ch"></div>
+
+  <div id="v-login" hidden>
+    <div class="hint">这里配的网址会出现在电视面板的「网站登录」分组里。
+      选中后电视打开该页并等待遥控——点按钮、输账号密码需要「电视遥控」App 的触控板。</div>
+    <div id="loginList"></div>
+    <fieldset>
+      <legend>新增登录网址</legend>
+      <label>名称</label><input id="lnName" placeholder="央视账号">
+      <label>地址</label><input id="lnUrl" placeholder="https://www.yangshipin.cn" inputmode="url">
+      <div class="row2"><button class="btn pri" id="lnAdd">添加</button></div>
+    </fieldset>
+  </div>
+
+  <div id="v-imp" hidden>
+    <fieldset>
+      <legend>批量导入</legend>
+      <textarea id="impText" placeholder="央视频道,#genre#
+CCTV1,https://tv.cctv.com/live/cctv1/
+CCTV2,https://tv.cctv.com/live/cctv2/"></textarea>
+      <div class="seg">
+        <label><input type="radio" name="mode" value="append" checked> 追加（同名同地址自动跳过）</label>
+      </div>
+      <div class="seg">
+        <label><input type="radio" name="mode" value="replace"> 覆盖（清空现有再导入）</label>
+      </div>
+      <div class="hint">格式：分组名独占一行并以 <code>,#genre#</code> 结尾；频道一行一个
+        <code>名称,地址[,节目别名,清晰度]</code>（第三列只用来对节目单）。</div>
+      <div class="row2"><button class="btn pri" id="impGo">导入</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>危险操作</legend>
+      <button class="btn del" id="clearAll">清空全部频道</button>
+    </fieldset>
+  </div>
+</main>
+
+<div class="bar">
+  <button class="btn pri" style="flex:1" id="addCh">＋ 添加频道</button>
+  <button class="btn" id="reload">刷新</button>
+</div>
+
+<div class="mask" id="pinMask" hidden>
+  <div class="sheet">
+    <h2>输入电视上的配对码</h2>
+    <input id="pinInput" inputmode="numeric" maxlength="4" placeholder="4 位数字">
+    <div class="row2">
+      <button class="btn" id="pinCancel">取消</button>
+      <button class="btn pri" id="pinOk">确定</button>
+    </div>
+    <div class="hint">配对码显示在电视的「设置 → 配对二维码」页面里。</div>
+  </div>
+</div>
+
+<div class="mask" id="editMask" hidden>
+  <div class="sheet">
+    <h2 id="editTitle">添加频道</h2>
+    <label>频道名称</label><input id="eName" placeholder="CCTV1">
+    <label>分组</label><input id="eGroup" list="groupList" placeholder="央视频道">
+    <datalist id="groupList"></datalist>
+    <label>播放地址</label><input id="eUrl" inputmode="url" placeholder="https://...">
+    <label>清晰度</label><input id="eQuality" placeholder="HD">
+    <div class="row2">
+      <button class="btn" id="eCancel">取消</button>
+      <button class="btn pri" id="eSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var state = null;
+  var view = 'ch';
+  // 编辑中的原条目：null 表示新增；否则保存时走 ch.upd
+  var editing = null;
+
+  function pin() { try { return localStorage.getItem('tvpin') || ''; } catch (e) { return ''; } }
+  function setPin(v) { try { localStorage.setItem('tvpin', v); } catch (e) {} }
+
+  function toast(msg, bad) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'on' + (bad ? ' bad' : '');
+    clearTimeout(toast.h);
+    toast.h = setTimeout(function () { t.className = ''; }, 2200);
+  }
+
+  function api(op, body) {
+    return fetch('api/' + op, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Pin': pin() },
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json().then(function (j) { return { status: r.status, json: j }; }); });
+  }
+
+  function getState() {
+    return fetch('api/state', { headers: { 'X-Pin': pin() } })
+      .then(function (r) { return r.json(); });
+  }
+
+  /** 统一处理返回：401 弹配对码框，其余把最新状态接上 */
+  function handle(j) {
+    if (j.status === 401) { askPin(); return Promise.reject('pin'); }
+    if (j.json && j.json.ok === false) { toast(j.json.err || '操作失败', true); return Promise.reject(j.json.err); }
+    if (j.json && j.json.groups) apply(j.json);
+    return j.json;
+  }
+
+  function apply(s) {
+    state = s;
+    $('dev').textContent = s.device || '';
+    render();
+  }
+
+  // ---------------- 渲染 ----------------
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function render() {
+    if (!state) return;
+    $('pinShow').textContent = pin() || '----';
+    renderChannels();
+    renderLogins();
+    var names = state.groups.map(function (g) { return '<option value="' + esc(g.name) + '">'; });
+    $('groupList').innerHTML = names.join('');
+  }
+
+  function renderChannels() {
+    var host = $('v-ch');
+    var playing = state.playing && state.playing.url;
+    var groups = state.groups.filter(function (g) { return g.channels.length; });
+    if (!groups.length) {
+      host.innerHTML = '<div class="empty">还没有频道<br>' +
+        '点下面「添加频道」一条条加，或到「导入」页粘一整份列表</div>';
+      return;
+    }
+    host.innerHTML = groups.map(function (g) {
+      var rows = g.channels.map(function (ch) {
+        var on = ch.url === playing;
+        return '<div class="row' + (on ? ' playing' : '') + '">' +
+          '<div class="txt" data-edit="' + esc(ch.line) + '">' +
+            '<div class="nm">' + esc(ch.name) +
+              (ch.quality && ch.quality !== 'HD' ? '<span class="q">' + esc(ch.quality) + '</span>' : '') +
+              (on ? '<span class="q">播放中</span>' : '') + '</div>' +
+            '<div class="u">' + esc(ch.url) + '</div>' +
+          '</div>' +
+          '<div class="act">' +
+            '<button class="btn" data-play="' + esc(ch.line) + '">播</button>' +
+            '<button class="btn del" data-del="' + esc(ch.line) + '">删</button>' +
+          '</div></div>';
+      }).join('');
+      return '<div class="group"><div class="ghead"><b>' + esc(g.name) + '</b>' +
+        '<span>' + g.channels.length + '</span><span class="sp"></span>' +
+        '<button class="mini" data-gname="' + esc(g.name) + '">改名</button>' +
+        '<button class="mini" data-gdel="' + esc(g.name) + '">删组</button>' +
+        '</div>' + rows + '</div>';
+    }).join('');
+  }
+
+  function renderLogins() {
+    var host = $('loginList');
+    if (!state.logins.length) {
+      host.innerHTML = '<div class="empty">还没有登录网址</div>';
+      return;
+    }
+    host.innerHTML = state.logins.map(function (l) {
+      return '<div class="row"><div class="txt"><div class="nm">' + esc(l.name) + '</div>' +
+        '<div class="u">' + esc(l.url) + '</div></div>' +
+        '<div class="act"><button class="btn" data-lopen="' + esc(l.url) + '">打开</button>' +
+        '<button class="btn del" data-ldel="' + esc(l.url) + '">删</button></div></div>';
+    }).join('');
+  }
+
+  function findChannel(line) {
+    var all = [];
+    state.groups.forEach(function (g) {
+      g.channels.forEach(function (ch) { all.push({ g: g.name, ch: ch }); });
+    });
+    for (var i = 0; i < all.length; i++) if (String(all[i].ch.line) === String(line)) return all[i];
+    return null;
+  }
+
+  // ---------------- 交互 ----------------
+
+    function askPin() {
+    $('pinMask').hidden = false;
+    $('pinInput').value = '';
+    // 没配对之前列表是空的，把背后的“----”提示藏起来，免得像是已经连上了
+    $('pinShow').textContent = '';
+    $('pinInput').focus();
+  }
+
+  document.body.addEventListener('click', function (ev) {
+    var t = ev.target.closest('[data-play],[data-del],[data-edit],[data-lopen],[data-ldel],[data-gname],[data-gdel]');
+    if (!t) return;
+    var d = t.dataset;
+    function act(op, body, msg) {
+      api(op, body).then(handle).then(function () { toast(msg); }).catch(function () {});
+    }
+    if (d.play != null) {
+      var p = findChannel(d.play);
+      if (p) act('play', { group: p.g, name: p.ch.name, url: p.ch.url, line: p.ch.line }, '电视已切台');
+    } else if (d.del != null) {
+      var x = findChannel(d.del);
+      if (x && confirm('删除「' + x.ch.name + '」？'))
+        act('ch.del', { line: x.ch.line, group: x.g, name: x.ch.name, url: x.ch.url }, '已删除');
+    } else if (d.edit != null) {
+      openEdit(findChannel(d.edit));
+    } else if (d.lopen != null) {
+      act('login.open', { url: d.lopen }, '电视正在打开登录页');
+    } else if (d.ldel != null) {
+      if (confirm('删除这个登录网址？')) act('login.del', { url: d.ldel }, '已删除');
+    } else if (d.gname != null) {
+      var n = prompt('分组改名为', d.gname);
+      if (n && n !== d.gname) act('group.rename', { old: d.gname, new: n }, '已改名');
+    } else if (d.gdel != null) {
+      if (confirm('删除分组「' + d.gdel + '」及其全部频道？'))
+        act('group.del', { name: d.gdel }, '已删除');
+    }
+  });
+
+  function openEdit(hit) {
+    editing = hit || null;
+    $('editTitle').textContent = hit ? '编辑频道' : '添加频道';
+    $('eName').value = hit ? hit.ch.name : '';
+    $('eGroup').value = hit ? hit.g : '';
+    $('eUrl').value = hit ? hit.ch.url : '';
+    $('eQuality').value = hit ? (hit.ch.quality || 'HD') : 'HD';
+    $('editMask').hidden = false;
+    if (!hit) $('eName').focus();
+  }
+
+  $('eCancel').onclick = function () { $('editMask').hidden = true; };
+  $('eSave').onclick = function () {
+    var name = $('eName').value.trim(), group = $('eGroup').value.trim();
+    var url = $('eUrl').value.trim(), quality = $('eQuality').value.trim();
+    if (!name || !url) { toast('名称和地址都要填', true); return; }
+    var op = editing ? 'ch.upd' : 'ch.add';
+    var body = editing
+      ? { line: editing.ch.line, group: editing.g, name: editing.ch.name, url: editing.ch.url,
+          newGroup: group, newName: name, newUrl: url, newQuality: quality }
+      : { group: group, name: name, url: url, quality: quality };
+    api(op, body).then(function (r) {
+      handle(r);
+      $('editMask').hidden = true;
+      toast(editing ? '已保存' : '已添加');
+    }).catch(function () {});
+  };
+
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (el) {
+    el.onclick = function () {
+      view = el.dataset.v;
+      Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (x) {
+        x.classList.toggle('on', x === el);
+      });
+      ['ch', 'login', 'imp'].forEach(function (v) { $('v-' + v).hidden = (v !== view); });
+    };
+  });
+
+  $('addCh').onclick = function () { openEdit(null); };
+  $('reload').onclick = function () { refresh(true); };
+  $('pinOk').onclick = function () {
+    var v = $('pinInput').value.trim();
+    if (!/^\d{4}$/.test(v)) { toast('要 4 位数字', true); return; }
+    setPin(v);
+    $('pinMask').hidden = true;
+    refresh(true);
+  };
+  $('pinCancel').onclick = function () { $('pinMask').hidden = true; };
+  $('regen').onclick = function () {
+    if (!pin()) { askPin(); return; }
+    if (!confirm('换配对码后，已连过的手机要重新输码。继续？')) return;
+    api('pin.regenerate', {}).then(function (r) {
+      if (r.status === 401) { askPin(); return; }
+      if (r.json.ok) { setPin(r.json.pin); $('pinShow').textContent = r.json.pin; toast('新配对码 ' + r.json.pin); }
+      else toast(r.json.err || '失败', true);
+    }).catch(function () {});
+  };
+  $('lnAdd').onclick = function () {
+    var name = $('lnName').value.trim(), url = $('lnUrl').value.trim();
+    if (!url) { toast('地址不能为空', true); return; }
+    api('login.add', { name: name, url: url }).then(function (r) {
+      handle(r);
+      $('lnName').value = ''; $('lnUrl').value = '';
+      toast('已添加');
+    }).catch(function () {});
+  };
+  $('impGo').onclick = function () {
+    var text = $('impText').value;
+    if (!text.trim()) { toast('先粘内容', true); return; }
+    var replace = document.querySelector('input[name=mode]:checked').value === 'replace';
+    if (replace && !confirm('会清空现有全部频道，只留这份导入的。继续？')) return;
+    api('ch.import', { text: text, replace: replace }).then(function (r) {
+      handle(r);
+      if (r.json && r.json.ok) { toast('已导入 ' + r.json.added + ' 个频道'); $('impText').value = ''; }
+    }).catch(function () {});
+  };
+  $('clearAll').onclick = function () {
+    if (!confirm('清空全部频道？这一步不能撤销。')) return;
+    api('ch.clear', {}).then(function (r) { handle(r); toast('已清空'); }).catch(function () {});
+  };
+
+  function refresh(loud) {
+    getState().then(function (j) {
+      if (j.ok === false) { askPin(); return; }
+      apply(j);
+      if (loud) toast('已刷新');
+    }).catch(function () {
+      toast('连不上电视：确认和电视在同一个网络', true);
+    });
+  }
+
+  if (!pin()) askPin(); else refresh(false);
+})();
+</script>
+</body>
+</html>

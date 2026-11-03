@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  左侧频道信息栏（纯展示，不参与焦点/方向键）：台标 + 在播/预览状态、频道介绍、EPG、系统时间。
+  左列「频道信息」（纯展示，不参与焦点/方向键）：
+  状态药丸 → 频道名 → 在播节目 → 时段与剩余 → 进度线 → 下一档 → 底部系统时间。
+  整列从上到下一眼读完，不需要按键走到这里。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/infoPanel"
@@ -10,11 +12,12 @@
     android:clickable="true"
     android:focusable="false"
     android:orientation="vertical"
-    android:paddingStart="14dp"
-    android:paddingTop="14dp"
-    android:paddingEnd="14dp"
-    android:paddingBottom="14dp">
+    android:paddingStart="22dp"
+    android:paddingTop="20dp"
+    android:paddingEnd="22dp"
+    android:paddingBottom="20dp">
 
+    <!-- 电视只有光标没有鼠标，必须说清这是“在播的台”还是“正在预览的台” -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -22,106 +25,72 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <FrameLayout
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_weight="1"
-            android:background="@drawable/info_logo_bg">
-
-            <TextView
-                android:id="@+id/infoLogo"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:autoSizeMaxTextSize="17sp"
-                android:autoSizeMinTextSize="9sp"
-                android:autoSizeTextType="uniform"
-                android:gravity="center"
-                android:includeFontPadding="false"
-                android:maxLines="1"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:text="TV"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold" />
-
-            <ImageView
-                android:id="@+id/infoLogoImage"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:contentDescription="@null"
-                android:padding="5dp"
-                android:scaleType="fitCenter"
-                android:visibility="invisible" />
-        </FrameLayout>
-
         <TextView
             android:id="@+id/infoState"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
             android:background="@drawable/info_state_preview"
-            android:paddingStart="9dp"
-            android:paddingTop="3dp"
-            android:paddingEnd="9dp"
-            android:paddingBottom="3dp"
+            android:maxLines="1"
+            android:paddingStart="12dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="5dp"
             android:textColor="#E6FFFFFF"
-            android:textSize="12sp" />
+            android:textSize="13sp" />
 
         <!-- 清晰度来自频道表第四列（默认 HD） -->
         <TextView
             android:id="@+id/infoQuality"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
+            android:layout_marginStart="8dp"
             android:background="@drawable/info_state_preview"
-            android:paddingStart="9dp"
-            android:paddingTop="3dp"
-            android:paddingEnd="9dp"
-            android:paddingBottom="3dp"
+            android:maxLines="1"
+            android:paddingStart="12dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="5dp"
             android:textColor="#99FFFFFF"
-            android:textSize="12sp" />
+            android:textSize="13sp" />
     </LinearLayout>
 
     <TextView
-        android:id="@+id/infoDesc"
+        android:id="@+id/infoTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="16dp"
         android:ellipsize="end"
-        android:maxLines="1"
-        android:textColor="#99FFFFFF"
-        android:textSize="12sp" />
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginTop="12dp"
-        android:background="#1AFFFFFF" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:text="正在播出"
-        android:textColor="#80FFFFFF"
-        android:textSize="12sp" />
+        android:maxLines="2"
+        android:textColor="#FFFFFF"
+        android:textSize="30sp"
+        android:textStyle="bold" />
 
     <TextView
         android:id="@+id/infoNow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="3dp"
+        android:layout_marginTop="10dp"
         android:ellipsize="end"
         android:maxLines="2"
-        android:text="节目单加载中…"
-        android:textColor="#FFFFFF"
+        android:textColor="#D9FFFFFF"
+        android:textSize="18sp" />
+
+    <TextView
+        android:id="@+id/infoRemain"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="#8E8E93"
         android:textSize="14sp" />
 
+    <!-- 节目进度：整宽一条细线 -->
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="3dp"
-        android:layout_marginTop="7dp"
-        android:background="#33FFFFFF">
+        android:layout_height="5dp"
+        android:layout_marginTop="18dp"
+        android:background="#26FFFFFF">
 
         <View
             android:id="@+id/infoProgress"
@@ -130,55 +99,58 @@
             android:background="#FFFFFF" />
     </FrameLayout>
 
-    <TextView
-        android:id="@+id/infoTime"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="5dp"
-        android:text="--:-- ~ --:--"
-        android:textColor="#80FFFFFF"
-        android:textSize="12sp" />
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="20dp"
+        android:background="#14FFFFFF" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="14dp"
         android:text="接下来"
-        android:textColor="#80FFFFFF"
-        android:textSize="12sp" />
+        android:textColor="#6C6C70"
+        android:textSize="11sp" />
 
     <TextView
         android:id="@+id/infoNext"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="3dp"
+        android:layout_marginTop="4dp"
         android:ellipsize="end"
-        android:maxLines="2"
-        android:text="--"
-        android:textColor="#CCFFFFFF"
-        android:textSize="14sp" />
+        android:maxLines="3"
+        android:textColor="#B3FFFFFF"
+        android:textSize="16sp" />
 
     <Space
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1" />
 
-    <TextView
-        android:id="@+id/infoClock"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="end"
-        android:includeFontPadding="false"
-        android:textColor="#FFFFFF"
-        android:textSize="28sp"
-        android:textStyle="bold" />
+        android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/infoDate"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:gravity="end"
-        android:textColor="#80FFFFFF"
-        android:textSize="12sp" />
+        <TextView
+            android:id="@+id/infoClock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#FFFFFF"
+            android:textSize="34sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/infoDate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:maxLines="1"
+            android:textColor="#80FFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
 </LinearLayout>

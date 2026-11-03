@@ -49,10 +49,10 @@ object EpgManager {
 
     data class Program(val start: Long, val stop: Long, val title: String)
 
-    /** 节目单进度（标题为空表示该频道没对上节目单） */
+    /** 节目单进度（标题为空表示该频道没对上节目单）；下一档的开播时间由界面自己从 next 取 */
     class Guide(
         val now: Program?, val next: Program?, val total: Int,
-        val nowText: String, val timeText: String, val nextText: String, val percent: Int
+        val nowText: String, val timeText: String, val percent: Int
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -247,7 +247,7 @@ object EpgManager {
 
     fun guideFor(name: String): Guide {
         val list = schedule[lookupKey(name)]
-        if (list.isNullOrEmpty()) return Guide(null, null, 0, "节目单未收录", "--:-- ~ --:--", "--", 0)
+        if (list.isNullOrEmpty()) return Guide(null, null, 0, "节目单未收录", "--:-- ~ --:--", 0)
         val now = System.currentTimeMillis()
         var lo = 0
         var hi = list.size - 1
@@ -256,7 +256,7 @@ object EpgManager {
             val mid = (lo + hi) ushr 1
             if (list[mid].stop > now) { hit = mid; hi = mid - 1 } else lo = mid + 1
         }
-        if (hit < 0) return Guide(null, null, list.size, "节目单已结束", "--:-- ~ --:--", "--", 0)
+        if (hit < 0) return Guide(null, null, list.size, "节目单已结束", "--:-- ~ --:--", 0)
         val first = list[hit]
         val cur = if (first.start > now) null else first
         val next = if (cur == null) first else list.getOrNull(hit + 1)
@@ -268,7 +268,6 @@ object EpgManager {
             cur, next, list.size,
             cur?.title ?: "即将开始",
             if (cur == null) "--:-- ~ --:--" else "${hhmm.format(cur.start)} ~ ${hhmm.format(cur.stop)}",
-            next?.title?.plus("（${hhmm.format(next.start)}）") ?: "--",
             pct
         )
     }

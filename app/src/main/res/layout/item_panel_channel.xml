@@ -2,10 +2,11 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="4dp"
+    android:layout_marginBottom="3dp"
     android:background="@drawable/panel_row"
     android:clickable="true"
     android:focusable="true"
+    android:focusableInTouchMode="true"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingStart="18dp"
@@ -15,27 +16,32 @@
 
     <TextView
         android:id="@+id/rowName"
-        android:layout_width="0dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
         android:ellipsize="end"
+        android:maxWidth="400dp"
         android:maxLines="1"
         android:textColor="#FFFFFF"
-        android:textSize="17sp" />
+        android:textSize="18sp" />
+
+    <!-- 名字靠左，中间留白由这块吸收，角标顶到行尾（整行仍是可点的焦点区） -->
+    <Space
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1" />
 
     <LinearLayout
         android:id="@+id/playBadge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:visibility="gone">
 
         <com.tvlive.web.BadgeIconView
             android:id="@+id/playBadgeIcon"
-            android:layout_width="15dp"
-            android:layout_height="14dp"
+            android:layout_width="17dp"
+            android:layout_height="16dp"
             android:contentDescription="@null"
             android:src="@drawable/badge_playing" />
 
@@ -46,6 +52,6 @@
             android:layout_marginStart="7dp"
             android:text="播放中"
             android:textColor="#FFFFFF"
-            android:textSize="12sp" />
+            android:textSize="13sp" />
     </LinearLayout>
 </LinearLayout>

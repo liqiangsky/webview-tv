@@ -45,42 +45,57 @@ import java.util.Date
 import java.util.concurrent.Executors
 
 /**
- * Android TV 直播网页播放器（沉浸式频道面板 V2）：
- * 底层全屏 WebView 常驻播放，按 OK / 点屏呼出频道选择遮罩：
- * 顶部 Coverflow 分组栏（居中放大、两侧压暗、自动吸附）+ 下方分组频道列表，
- * 焦点位置持久化（与正在播放的频道解耦），编辑页为全屏覆盖原生页。
- * 遮罩打开时视频持续播放；OK 切台并收起；Back：列表 → 分组 → 收起。
+ * Android TV 直播网页播放器（沉浸式频道面板）：
+ * 底层全屏 WebView 常驻播放，按 OK / 点屏呼出遮罩。遮罩一屏三列：
+ * 左 频道信息（在播/预览、EPG、进度、时间，纯展示）；
+ * 中 频道列表（上下选台、左右换组、OK 切台并收起，键位与最初设计一致）；
+ * 右 手机配置二维码（地址/配对码，电视端只展示回显）。
+ * 网站登录不在电视上列条目——手机配置页里点「在电视上打开」，电视直接开该站登录页。
+ * 频道与登录网址全部由配置网页写入，电视端只读展示；BACK 收起遮罩。
  */
-class MainActivity : Activity() {
+class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     private lateinit var webView: WebView
 
-    // 频道选择遮罩（列表与介绍都在分组大面板内部）
+    // 遮罩：左 频道信息 / 中 频道列表 / 右 手机配置二维码
     private lateinit var panelRoot: View
-    private lateinit var groupScroll: CoverflowScrollView
-    private lateinit var groupRow: LinearLayout
+    private lateinit var panelBody: View
+    private lateinit var panelList: LinearLayout
+    private lateinit var panelListScroll: ScrollView
+    private lateinit var panelEmpty: View
+    private lateinit var groupName: TextView
+    private lateinit var groupCount: TextView
+    private lateinit var groupPrev: TextView
+    private lateinit var groupNext: TextView
+    private lateinit var qrImage: ImageView
+    private lateinit var qrUrl: TextView
+    private lateinit var qrPin: TextView
+    private lateinit var qrRegen: View
 
-    // 左侧频道信息栏（台标 + 在播/预览状态 + 节目单，纯展示）
+    // 左列频道信息（频道名 + 在播/预览状态 + 节目单，纯展示）
     private lateinit var infoPanel: View
-    private lateinit var infoLogo: TextView
-    private lateinit var infoLogoImage: ImageView
+    private lateinit var infoTitle: TextView
     private lateinit var infoState: TextView
     private lateinit var infoQuality: TextView
-    private lateinit var infoDesc: TextView
     private lateinit var infoClock: TextView
     private lateinit var infoDate: TextView
     private lateinit var infoNow: TextView
-    private lateinit var infoTime: TextView
+    private lateinit var infoRemain: TextView
     private lateinit var infoNext: TextView
     private lateinit var infoProgress: View
     private var infoTarget: Channel? = null    // 信息栏当前展示的频道，节目单跟着它走
     private var infoFollowFocus = true        // 打开面板的首次聚焦不覆盖“在播频道”
     private val clockFmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-    private val dateFmt = java.text.SimpleDateFormat("M月d日 EEEE", java.util.Locale.CHINA)
+    private val dateFmt = java.text.SimpleDateFormat("M月d日 EEE", java.util.Locale.CHINA)
 
     // 直播页 / 遮罩是否处于打开状态
     private var webOpen = false
+    private var playTimeoutArmed = false     // 起播超时是否已排期（一次点台只计一次时）
     private var panelOpen = false
+    private var openKeyUp = false        // 呼出面板那一下按键的 UP 需要吃掉
+
+    // 从登录页返回后需要重载当前频道（让新登录 cookie 生效）
+    private var needReloadAfterLogin = false
 
     // 静态脚本磁盘缓存：meta 访问时间异步刷新用的单线程池
     private val cacheExecutor = Executors.newSingleThreadExecutor()
@@ -113,6 +128,9 @@ class MainActivity : Activity() {
     // 页面里的 blob 视频是否已经铺满屏幕（CSS 全屏）
     private var cssFullscreen = false
 
+    // 本次进入直播是否已经揭示过画面：为 true 后，页面内部跳转/换源不再盖黑幕（只进入一次）
+    private var liveEntered = false
+
     // 进入直播网页后屏蔽页面操作（只看视频，不让人点网页）
     private var pageInputBlocked = false
 
@@ -140,6 +158,27 @@ class MainActivity : Activity() {
         }
     }
 
+    // ============================================================================
+    // 直播播放总览（全部通用逻辑，不针对任何具体站点）
+    // ----------------------------------------------------------------------------
+    // openChannel(url)  —— 换台：重建 WebView（会话不复用）→ liveEntered=false
+    //                      → showTransitionCover() 盖一次黑幕 → loadUrl
+    //   ↓ 页面加载后由 onPageStarted 尽早注入 APPLY_FS_JS（不等整页加载完）
+    // APPLY_FS_JS       —— pickVideo()：在 document + 同源 iframe 里挑 src 可播
+    //                      （blob: 或 m3u8/flv/mp4 等）且 getBoundingClientRect 面积最大的
+    //                      <video>，塞进 #000 fixed 全屏容器、applyStyles 铺满、tryPlay 重试起播。
+    //                      返回 '0'=还没找到可播的视频，'1'=已铺满。
+    // videoWatch(800ms)  —— 轮询 APPLY_FS_JS，首次返回 '1' 后停轮询、转 frameWatch
+    // frameWatch(250ms)  —— 等首帧真正呈现（FRAME_READY_JS），置 liveEntered=true、
+    //                      hideTransitionCover() 淡入画面（这就是“进入”那一下）
+    // fsWatch(1000ms)    —— 进入后持续跟随：换源/广告→正片时复用同一容器换 video，
+    //                      并把播放器重写的样式重新落实
+    // 只进入一次黑幕     —— liveEntered 置位后，onPageStarted / shouldOverrideUrlLoading
+    //                      / onPageFinished 里都不再 showTransitionCover，抖音这类
+    //                      连续重定向/换源就不会反复黑屏
+    // 登录态共享         —— 所有 WebView 共用全局 CookieManager，同域名登录自动携带
+    // ============================================================================
+
     // 轮询页面里的 blob 视频；一出现就把它铺满视口（不需要全屏 API，不需要用户手势）
     private val videoWatch: Runnable = object : Runnable {
         override fun run() {
@@ -165,6 +204,7 @@ class MainActivity : Activity() {
             webView.evaluateJavascript(FRAME_READY_JS) { result ->
                 if (result?.trim()?.trim('"') == "1") {
                     Log.d(TAG, "first video frame ready")
+                    liveEntered = true
                     hideTransitionCover()
                 }
             }
@@ -181,12 +221,33 @@ class MainActivity : Activity() {
         }
     }
 
-    // 兑底：40 秒还没全屏就收起过渡动画，避免一直转圈
+    // 起播兜底：点台后 10 秒内没等到视频首帧，就当这个台起不来，收黑幕并显示错误页。
+    // 计时只在 openChannel 起一次，页面中途重定向/换源不再续表（抖音这类会一直跳）
     private val coverTimeout = Runnable {
+        playTimeoutArmed = false
         if (customView == null && transitionCover != null) {
-            Log.d(TAG, "cover timeout, hide")
-            hideTransitionCover()
+            Log.d(TAG, "play timeout, show error page")
+            showPlayError()
         }
+    }
+
+    private fun armPlayTimeout() {
+        if (playTimeoutArmed) return
+        playTimeoutArmed = true
+        webView.removeCallbacks(coverTimeout)
+        webView.postDelayed(coverTimeout, PLAY_TIMEOUT_MS)
+    }
+
+    private fun disarmPlayTimeout() {
+        playTimeoutArmed = false
+        webView.removeCallbacks(coverTimeout)
+    }
+
+    /** 起播超时：先掐掉起不来的网页（释放它的播放器/解码器/JS 堆），再显示本地错误页 */
+    private fun showPlayError() {
+        webView.stopLoading()
+        hideTransitionCover()
+        webView.loadUrl("$ERROR_URL?msg=" + Uri.encode(PLAY_ERROR_TEXT))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -198,22 +259,34 @@ class MainActivity : Activity() {
         hideSystemUi()
 
         panelRoot = findViewById(R.id.panelRoot)
-        groupScroll = findViewById(R.id.groupScroll)
-        groupRow = findViewById(R.id.groupRow)
+        panelBody = findViewById(R.id.panelBody)
+        panelList = findViewById(R.id.panelList)
+        panelListScroll = findViewById(R.id.panelListScroll)
+        panelEmpty = findViewById(R.id.panelEmpty)
+        groupName = findViewById(R.id.groupName)
+        groupCount = findViewById(R.id.groupCount)
+        groupPrev = findViewById(R.id.groupPrev)
+        groupNext = findViewById(R.id.groupNext)
+        qrImage = findViewById(R.id.qrImage)
+        qrUrl = findViewById(R.id.qrUrl)
+        qrPin = findViewById(R.id.qrPin)
+        qrRegen = findViewById(R.id.qrRegen)
         infoPanel = findViewById(R.id.infoPanel)
-        infoLogo = findViewById(R.id.infoLogo)
-        infoLogoImage = findViewById(R.id.infoLogoImage)
+        infoTitle = findViewById(R.id.infoTitle)
         infoState = findViewById(R.id.infoState)
         infoQuality = findViewById(R.id.infoQuality)
-        infoDesc = findViewById(R.id.infoDesc)
         infoClock = findViewById(R.id.infoClock)
         infoDate = findViewById(R.id.infoDate)
         infoNow = findViewById(R.id.infoNow)
-        infoTime = findViewById(R.id.infoTime)
+        infoRemain = findViewById(R.id.infoRemain)
         infoNext = findViewById(R.id.infoNext)
         infoProgress = findViewById(R.id.infoProgress)
-        // 手机滑动换组（触屏模式没有焦点事件）：选中态跟随居中卡
-        groupScroll.onCenterChanged = { idx -> onGroupCentered(idx) }
+        // 换码按钮：tvOS 的焦点语言是放大提亮，不是描边
+        qrRegen.setOnClickListener { rotatePin() }
+        qrRegen.addFocusScale()
+        // 组头箭头：触屏没有左右键，换组得有地方按；遥控器仍走列表里的左右键
+        groupPrev.setOnClickListener { stepGroup(-1) }
+        groupNext.setOnClickListener { stepGroup(1) }
 
         // 点空白处收起遮罩
         panelRoot.setOnClickListener { hidePanel() }
@@ -224,12 +297,16 @@ class MainActivity : Activity() {
         setupWebView()
 
         // 底层常驻播放：直接播第一个频道，遮罩随时呼出
+        ChannelStore.onChanged = { onStoreChanged() }
         reloadChannels()
-        groups.firstOrNull()?.channels?.firstOrNull()?.let {
-            playingLine = it.line
-            refreshAllPanels()      // 面板在 playingLine 赋值前就建好了，补一次才有“播放中”
-            openChannel(it.url)
-        } ?: Toast.makeText(this, "暂无频道：请在 channels.txt 里按 \"分组名,#genre#\" 格式添加", Toast.LENGTH_LONG).show()
+        val first = ChannelStore.channels().firstOrNull()
+        if (first == null) showPairing()          // 出厂不带频道：先教用户怎么连配置页
+        else {
+            playingLine = first.line
+            renderPanel()
+            openChannel(first.url)
+        }
+        renderQrCard()
         // 节目单到货（闹钟或启动补拉）后重画信息栏
         EpgManager.onChanged = { renderGuide() }
         renderInfo(null)
@@ -256,187 +333,220 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------- 频道选择遮罩（Coverflow 分组 + 频道列表） ----------
+    // ---------- 遮罩：频道信息 / 频道列表 / 手机配置二维码 ----------
 
-    /** 读频道文件并按分组归类（“分组名,#genre#”标题行，或行尾“$分组”后缀） */
+    /**
+     * 从 ChannelStore 重读频道并重建面板。
+     * 数据只由配置网页写入，这里负责人家在落盘后把界面跟上。
+     */
     private fun reloadChannels() {
-        groups = groupChannels(parseChannels(loadChannelsText()))
-        curGroupIdx = curGroupIdx.coerceIn(0, (groups.size - 1).coerceAtLeast(0))
-        buildGroupRow()
-    }
-
-    private fun groupChannels(chs: List<Channel>): List<Group> {
         val map = LinkedHashMap<String, MutableList<Channel>>()
-        for (ch in chs) map.getOrPut(ch.group) { mutableListOf() }.add(ch)
-        return map.map { Group(it.key, it.value) }
+        for (ch in ChannelStore.channels()) map.getOrPut(ch.group) { mutableListOf() }.add(ch)
+        groups = map.map { Group(it.key, it.value) }
+        curGroupIdx = curGroupIdx.coerceIn(0, (groups.size - 1).coerceAtLeast(0))
+        // 在播频道可能已被删掉：行号找不到就当没在播，避免角标和实际画面不一致
+        if (playingLine >= 0 && groups.asSequence().flatMap { it.channels.asSequence() }
+                .none { it.line == playingLine }
+        ) playingLine = -1
+        renderPanel()
     }
 
-    /** 构建 Coverflow 分组面板（标题独立悬浮在面板顶部，卡片内只有频道列表） */
-    private fun buildGroupRow() {
-        groupRow.removeAllViews()
-        for (gi in groups.indices) {
-            groupRow.addView(createGroupPanel(gi))
-        }
-        groupScroll.post { resizeGroupPanels() }
+    /**
+     * 配置网页改了数据：重建面板并重新认一次在播频道。
+     * 行号是文件里的物理行，任何一次增删都会让后面的频道整体位移，
+     * 所以不能沿用旧行号——要按地址重新定位，否则“播放中”角标会挂到别的频道上。
+     */
+    private fun onStoreChanged() {
+        val url = playingChannel()?.url
+        reloadChannels()
+        playingLine = url?.let { u ->
+            groups.asSequence().flatMap { it.channels.asSequence() }
+                .firstOrNull { it.url == u }?.line
+        } ?: -1
+        renderPanel()
+        renderInfo(null)
+        if (ChannelStore.channels().isEmpty()) showPairing() else hidePairing()
     }
 
-    /** 面板宽度 = 屏宽 68%、高度 = 可视区 78%，保证两侧透出相邻分组、上下不顶满屏幕 */
-    private fun resizeGroupPanels() {
-        val w = groupScroll.width
-        val h = groupScroll.height
-        if (w == 0 || h == 0) {
-            groupScroll.post { resizeGroupPanels() }
-            return
-        }
-        val panelW = (w * 0.68f).toInt()
-        val panelH = (h * 0.78f).toInt()
-        val sidePad = ((w - panelW) / 2).coerceAtLeast(0)
-        groupRow.setPadding(sidePad, 0, sidePad, 0)
-        for (i in 0 until groupRow.childCount) {
-            val child = groupRow.getChildAt(i)
-            val lp = child.layoutParams
-            if (lp.width != panelW || lp.height != panelH) {
-                lp.width = panelW
-                lp.height = panelH
-                child.layoutParams = lp
-            }
-        }
-        groupScroll.post { groupScroll.snapToNearest(false) }
+    // ---------- 配对页（配置网址二维码 + 配对码） ----------
+
+    private var pairing: PairingView? = null
+
+    /** 配置页地址：用实时局域网 IP，换网络后重新生成即失效 */
+    private fun configUrl(): String? =
+        Net.localIp()?.let { "http://$it:${TvApp.CONFIG_PORT}" }
+
+    /** 配置页地址：用实时局域网 IP，换网络后重新生成即失效 */
+    private fun renderQrCard() {
+        val url = configUrl()
+        qrUrl.text = url?.removePrefix("http://") ?: "未联网：连上 WiFi 后再试"
+        qrPin.text = ChannelStore.pin
+        url?.let { qrImage.setImageBitmap(Qr.bitmap(it, 440)) }
     }
 
-    private fun createGroupPanel(index: Int): View {
-        val v = layoutInflater.inflate(R.layout.item_group_panel, groupRow, false)
-        v.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) {
-                curGroupIdx = index
-                groupScroll.smoothScrollToCenter(index)
-                updateGroupSelection(index)
-                renderChannelList(index)
-                // 进组即落点：本组有在播频道就选中它，否则第一行
-                focusListIndex(index, openListIndex(index))
-                if (infoFollowFocus) renderInfo(focusedChannel())
-            }
-            groupScroll.applyDepth() // 选中卡全亮 / 两侧景深重新计算
-        }
-        v.setOnClickListener {
-            // 触屏点侧边卡片：该分组成为选中组（电视走焦点，不需要这里处理）
-            if (index != curGroupIdx) {
-                activateGroup(index)
-            } else {
-                focusListIndex(index, openListIndex(index))
-            }
-        }
-        v.setOnKeyListener { _, keyCode, event ->
-            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-            when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> { switchGroup(index - 1); true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> { switchGroup(index + 1); true }
-                KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    focusListIndex(index, openListIndex(index))
-                    true
-                }
-                else -> false
-            }
-        }
-        // 面板刚创建（还没入树）：直接在里面建频道行
-        renderChannelList(index, v)
-        return v
+    private fun rotatePin() {
+        ChannelStore.regeneratePin()
+        renderQrCard()
+        pairing?.refresh(configUrl(), ChannelStore.pin)
+        toast("已换新配对码 ${ChannelStore.pin}")
     }
 
-    /** 左右切组（260ms 防抖）：焦点进该组卡片，由卡片焦点回调落到在播频道/首行 */
-    private fun switchGroup(target: Int) {
-        if (target !in 0 until groupRow.childCount) return
+    /** tvOS 的焦点反馈：聚焦项放大提亮，而不是给它描一条边 */
+    private fun View.addFocusScale() = setOnFocusChangeListener { v, has ->
+        val s = if (has) 1.08f else 1f
+        v.scaleX = s
+        v.scaleY = s
+        v.alpha = if (has) 1f else 0.7f
+    }
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showPairing() {
+        val v = pairing ?: PairingView(this).also { fresh ->
+            fresh.onRegenerate = {
+                fresh.refresh(configUrl(), ChannelStore.regeneratePin())
+            }
+            pairing = fresh
+        }
+        v.refresh(configUrl(), ChannelStore.pin)
+        if (v.parent == null) {
+            addContentView(v, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        v.visibility = View.VISIBLE
+        v.requestFocus()
+        hideSystemUi()
+    }
+
+    private fun hidePairing() {
+        pairing?.takeIf { it.visibility == View.VISIBLE }?.visibility = View.GONE
+    }
+
+    private val pairingOpen get() = pairing?.visibility == View.VISIBLE
+
+    // ---------- 配置服务落到界面上的动作 ----------
+
+    override fun playing(): Channel? = playingChannel()
+
+    override fun play(group: String, name: String, url: String): Boolean {
+        if (isFinishing) return false
+        // 优先认列表里已有的条目，行号和台标才对得上；网页刚加完还没回读时退回合成条目
+        val ch = groups.asSequence().flatMap { it.channels.asSequence() }
+            .firstOrNull { it.url == url }
+            ?: Channel(name, url, -1, group, name, "HD")
+        hidePairing()
+        hidePanel()
+        playingLine = ch.line
+        // 手机点的台可能在别的分组：面板跟着跳过去，回来按呼出键才看得到它高亮
+        groups.indexOfFirst { g -> g.channels.any { it.line == ch.line } }
+            .takeIf { it >= 0 }?.let { curGroupIdx = it }
+        renderPanel()
+        renderInfo(ch)
+        openChannel(ch.url)
+        return true
+    }
+
+    override fun openLogin(url: String) {
+        hidePairing()
+        hidePanel()
+        needReloadAfterLogin = true
+        startActivity(Intent(this, LoginActivity::class.java).putExtra("url", url))
+    }
+
+    /** 左栏整体重画：组名/计数 + 换组箭头可用性 + 当前分组的频道列表 */
+    private fun renderPanel() {
+        val g = groups.getOrNull(curGroupIdx)
+        groupName.text = g?.name ?: "暂无频道"
+        groupCount.text = if (g == null) "" else "${curGroupIdx + 1} / ${groups.size} · ${g.channels.size} 个"
+        // 首尾没有可换的组，箭头压暗禁用
+        groupPrev.isEnabled = curGroupIdx > 0
+        groupNext.isEnabled = curGroupIdx < groups.size - 1
+        groupPrev.alpha = if (groupPrev.isEnabled) 1f else 0.28f
+        groupNext.alpha = if (groupNext.isEnabled) 1f else 0.28f
+        renderChannelList()
+    }
+
+    /** 左右翻一组（260ms 防抖，连按遥控器不会糊过去） */
+    private fun stepGroup(delta: Int) {
+        val target = curGroupIdx + delta
+        if (target !in groups.indices) return
         val now = SystemClock.uptimeMillis()
         if (now - lastGroupNavAt < 260) return
         lastGroupNavAt = now
-        groupRow.getChildAt(target)?.requestFocus()
+        showGroup(target)
     }
 
-    /** 渲染指定分组面板里的频道列表（正在播放的行带声波角标） */
-    private fun renderChannelList(groupIdx: Int) {
-        val panel = groupRow.getChildAt(groupIdx) ?: return
-        renderChannelList(groupIdx, panel)
+    /** 切到指定分组：重画列表，光标落在本组的在播频道（没有就第一行） */
+    private fun showGroup(idx: Int) {
+        if (idx !in groups.indices) return
+        curGroupIdx = idx
+        listIndexByGroup[idx] = openListIndex(idx)
+        renderPanel()
+        focusListIndex(listIndexByGroup[idx] ?: 0)
+        if (infoFollowFocus) renderInfo(focusedChannel())
+        persistFocus()
     }
 
-    private fun renderChannelList(groupIdx: Int, panel: View) {
-        val list = panel.findViewById<LinearLayout>(R.id.panelList) ?: return
-        list.removeAllViews()
-        val g = groups.getOrNull(groupIdx) ?: return
+    /** 渲染当前分组的频道列表（正在播放的行带声波角标） */
+    private fun renderChannelList() {
+        panelList.removeAllViews()
+        val g = groups.getOrNull(curGroupIdx)
+        panelEmpty.visibility = if (g == null || g.channels.isEmpty()) View.VISIBLE else View.GONE
+        if (g == null) return
+        val gi = curGroupIdx
         for ((ci, ch) in g.channels.withIndex()) {
-            val row = layoutInflater.inflate(R.layout.item_panel_channel, list, false)
+            val row = layoutInflater.inflate(R.layout.item_panel_channel, panelList, false)
             row.findViewById<TextView>(R.id.rowName).text = ch.name
-            val isPlaying = ch.line == playingLine
+            val isPlaying = playingNow(ch)
             if (isPlaying) {
                 row.findViewById<View>(R.id.playBadge).visibility = View.VISIBLE
                 styleRow(row, true)          // 里面会把声波动画拉起来
             }
             row.tag = ci
             row.setOnFocusChangeListener { v2, hasFocus ->
-                if (groupIdx != curGroupIdx) {
-                    // 侧边分组频道行意外抢焦（按 id 恢复焦点）：不显示光标，焦点还给当前组
-                    if (hasFocus) panel.post { focusGroupCard(curGroupIdx) }
-                    return@setOnFocusChangeListener
-                }
                 styleRow(v2, hasFocus || isPlaying)
                 if (hasFocus) {
-                    listIndexByGroup[groupIdx] = ci
+                    listIndexByGroup[gi] = ci
                     if (infoFollowFocus) renderInfo(ch)
-                    val scroll = panel.findViewById<ScrollView>(R.id.panelListScroll)
-                    scroll?.post { smoothScrollToView(scroll, v2) }
+                    panelListScroll.post { smoothScrollToView(panelListScroll, v2) }
                     persistFocus()
                 }
             }
-            row.setOnClickListener {
-                // 触屏点的频道不属于当前激活分组：只切组，不播放（再点一次即播放）
-                if (groupIdx != curGroupIdx) {
-                    activateGroup(groupIdx)
-                } else {
-                    playChannel(ch)
-                }
-            }
-            row.setOnKeyListener { v, keyCode, event ->
+            row.setOnClickListener { playChannel(ch) }
+            row.setOnKeyListener { _, keyCode, event ->
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 when (keyCode) {
-                    // 列表第一行按上 → 光标上浮回分组面板
-                    KeyEvent.KEYCODE_DPAD_UP ->
-                        if ((v.tag as? Int) == 0) { focusGroupCard(groupIdx); true } else false
-                    // 列表里左右键也切组，下键交给焦点系统上下移动
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { switchGroup(groupIdx - 1); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { switchGroup(groupIdx + 1); true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { stepGroup(-1); true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { stepGroup(1); true }
                     else -> false
                 }
             }
-            list.addView(row)
+            panelList.addView(row)
         }
     }
 
-    // ---------- 左侧信息栏（台标 / 在播·预览状态 / 频道介绍 / EPG / 系统时间） ----------
+    // ---------- 左列频道信息（在播·预览状态 / EPG / 系统时间） ----------
 
     /** 信息栏跟着焦点预览；ch 为 null 表示回到“在播频道” */
     private fun renderInfo(ch: Channel?) {
         val target = ch ?: playingChannel() ?: return
         infoTarget = target
-        val playing = target.line == playingLine
-        infoLogo.text = target.name
-        // 有图压图，没图（或还在下）就显示文字台标，位置不跳
-        LogoLoader.into(infoLogoImage, target.logo) { has ->
-            infoLogoImage.visibility = if (has) View.VISIBLE else View.INVISIBLE
-            infoLogo.visibility = if (has) View.INVISIBLE else View.VISIBLE
-        }
+        val playing = playingNow(target)
+        infoTitle.text = target.name
         infoQuality.text = target.quality
-        // 电视只有光标没有鼠标，左侧必须说清这是“在播的台”还是“正在预览的台”
+        // 电视只有光标没有鼠标，信息栏必须说清这是“在播的台”还是“正在预览的台”
         infoState.text = if (playing) "正在播放" else "预览中"
         infoState.setBackgroundResource(
             if (playing) R.drawable.info_state_playing else R.drawable.info_state_preview
         )
         infoState.setTextColor(if (playing) 0xFF0E0E10.toInt() else 0xE6FFFFFF.toInt())
-        val host = runCatching { Uri.parse(target.url).host }.getOrNull()
-        infoDesc.text = if (host == null) target.group else "${target.group} · $host"
         updateInfoClock()
         renderGuide()
     }
 
-    /** 节目单三行：没对上频道就退回占位文案，不影响其它信息 */
+    /** 节目单：在播标题 + 时段/剩余 + 进度线 + 下一档；没对上频道就退回占位文案 */
     private fun renderGuide() {
         val ch = infoTarget ?: return
         val guide = if (EpgManager.ready()) {
@@ -449,15 +559,25 @@ class MainActivity : Activity() {
                 EpgManager.attempted -> "节目单获取失败"
                 else -> "节目单加载中…"
             }
-            infoTime.text = "--:-- ~ --:--"
-            infoNext.text = "--"
+            infoRemain.text = ""
+            infoNext.text = ""
             setGuideProgress(0)
             return
         }
         infoNow.text = guide.nowText
-        infoTime.text = guide.timeText
-        infoNext.text = guide.nextText
+        // 左列窄，时段和剩余都压成最短写法，免得被省略号截掉
+        infoRemain.text = guide.now?.let {
+            "${guide.timeText.replace(" ~ ", "~")} · 剩${leftMinutes(it.stop)}"
+        } ?: guide.timeText
+        infoNext.text = guide.next?.let { "${it.title} ${clockFmt.format(Date(it.start))}" }
+            ?: "暂无节目单"
         setGuideProgress(guide.percent)
+    }
+
+    /** 离这一档结束还有多久：不足一分钟按一分钟算，跨小时也照样用分钟说（电视上一眼要看完） */
+    private fun leftMinutes(stopAt: Long): String {
+        val m = Math.ceil((stopAt - System.currentTimeMillis()) / 60000.0).toInt()
+        return if (m <= 0) "即将结束" else if (m < 60) "${m}分" else "${m / 60}时${m % 60}分"
     }
 
     private fun setGuideProgress(pct: Int) {
@@ -476,8 +596,17 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * 该频道是否正在播放。登录条目和配对条目没有行号（-1），而 playingLine 为 -1
+     * 表示“未在播”，两者直接比会把它们点亮成在播，所以必须先挡掉 -1。
+     */
+    private fun playingNow(ch: Channel) = playingLine >= 0 && ch.line == playingLine
+
+    /** 在播频道。登录条目和配对条目没有行号（-1），未播放时也必须返回 null，否则会被误认成在播 */
     private fun playingChannel(): Channel? =
-        groups.asSequence().flatMap { it.channels.asSequence() }.firstOrNull { it.line == playingLine }
+        if (playingLine < 0) null else
+            groups.asSequence().flatMap { it.channels.asSequence() }
+                .firstOrNull { it.line == playingLine }
 
     /** 焦点所在频道（浏览位置）；该组还没记位置时退回首行 */
     private fun focusedChannel(): Channel? =
@@ -495,34 +624,6 @@ class MainActivity : Activity() {
             renderGuide()
             infoPanel.postDelayed(this, 20_000)
         }
-    }
-
-    /** 分组不再做描边高亮：居中卡靠景深（全亮/放大）天然突出，这里只同步景深基准 */
-    private fun updateGroupSelection(idx: Int) {
-        groupScroll.selectedIndex = idx
-    }
-
-    /** 手机滑动换组：选中态跟随居中卡（频道光标=在播频道，不随分组切换消失） */
-    private fun onGroupCentered(idx: Int) {
-        if (idx == curGroupIdx) return
-        curGroupIdx = idx
-        updateGroupSelection(idx)
-        listIndexByGroup[idx] = openListIndex(idx)
-        if (infoFollowFocus) renderInfo(focusedChannel())
-        persistFocus()
-    }
-
-    /** 触屏激活分组：requestFocus 在触摸模式下不生效，显式切居中/选中/列表 */
-    private fun activateGroup(idx: Int) {
-        if (idx !in groups.indices) return
-        curGroupIdx = idx
-        groupScroll.smoothScrollToCenter(idx)
-        updateGroupSelection(idx)
-        renderChannelList(idx)
-        listIndexByGroup[idx] = openListIndex(idx)
-        if (infoFollowFocus) renderInfo(focusedChannel())
-        persistFocus()
-        groupScroll.applyDepth()
     }
 
     /** tvOS 光标：聚焦/在播的行浮出白色药丸、文字转深色；普通行透明白字 */
@@ -545,21 +646,13 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun focusGroupCard(groupIdx: Int) {
-        groupRow.getChildAt(groupIdx.coerceIn(0, groupRow.childCount - 1))?.requestFocus()
-    }
-
-    private fun focusListIndex(groupIdx: Int, index: Int) {
-        val panel = groupRow.getChildAt(groupIdx) ?: return
-        val g = groups.getOrNull(groupIdx) ?: return
+    /** 把光标放到列表第 index 行，并滚到看得见的位 */
+    private fun focusListIndex(index: Int) {
+        val g = groups.getOrNull(curGroupIdx) ?: return
         if (g.channels.isEmpty()) return
-        val list = panel.findViewById<LinearLayout>(R.id.panelList) ?: return
-        val idx = index.coerceIn(0, g.channels.size - 1)
-        val row = list.getChildAt(idx) ?: return
+        val row = panelList.getChildAt(index.coerceIn(0, g.channels.size - 1)) ?: return
         row.requestFocus()
-        panel.findViewById<ScrollView>(R.id.panelListScroll)?.let { scroll ->
-            scroll.post { smoothScrollToView(scroll, row) }
-        }
+        panelListScroll.post { smoothScrollToView(panelListScroll, row) }
     }
 
     private fun smoothScrollToView(scroll: ScrollView, v: View) {
@@ -569,23 +662,15 @@ class MainActivity : Activity() {
 
     /** 选中频道：切台后面板保持打开（可连续换台）；点的正是在播频道则只收起面板 */
     private fun playChannel(ch: Channel) {
-        if (ch.line == playingLine) {
+        if (playingNow(ch)) {
             hidePanel()
             return
         }
         playingLine = ch.line
-        refreshAllPanels()
+        renderPanel()
         renderInfo(ch)
         persistFocus()
         openChannel(ch.url)
-    }
-
-    /** 切台后全量刷新：旧分组残留的“播放中”角标/光标全部清掉（渲染时只认当前在播频道） */
-    private fun refreshAllPanels() {
-        val gi = groups.indexOfFirst { g -> g.channels.any { it.line == playingLine } }
-        for (i in 0 until groupRow.childCount) if (i != gi) renderChannelList(i)
-        // 最后重渲染在播分组：声波角标动画不被后续面板的重渲染停掉
-        if (gi >= 0) renderChannelList(gi)
     }
 
     /** 面板毛玻璃：面板可见（含切台加载期间）把底层视频层整体高斯模糊（API31+ 实时 GPU 模糊，低版本不做） */
@@ -618,20 +703,18 @@ class MainActivity : Activity() {
         restoreFocus()
         val gi = curGroupIdx.coerceIn(0, groups.size - 1)
         curGroupIdx = gi
-        updateGroupSelection(gi)
         val li = openListIndex(gi)
         panelRoot.visibility = View.VISIBLE
         panelRoot.alpha = 0f
         panelRoot.animate().alpha(1f).setDuration(250).start()
-        renderChannelList(gi)
-        // 刚打开时左侧先给“在播频道”，等恢复焦点的那一下过去再跟着焦点走
+        renderPanel()
+        renderQrCard()
+        // 刚打开时信息栏先给“在播频道”，等恢复焦点的那一下过去再跟着焦点走
         infoFollowFocus = false
         renderInfo(null)
-        groupScroll.post {
-            groupScroll.smoothScrollToCenter(gi)
-            focusGroupCard(gi)
-            focusListIndex(gi, li)
-            groupScroll.post { infoFollowFocus = true }
+        panelRoot.post {
+            focusListIndex(li)
+            panelRoot.post { infoFollowFocus = true }
         }
         hideSystemUi()
     }
@@ -671,6 +754,8 @@ class MainActivity : Activity() {
     private fun openChannel(url: String) {
         if (webOpen) recreateWebView()
         webOpen = true
+        liveEntered = false
+        playTimeoutArmed = false   // 新台重新计时：showTransitionCover 里才会真的排期
         showTransitionCover()
         webView.visibility = View.VISIBLE
         webView.requestFocus()
@@ -687,7 +772,7 @@ class MainActivity : Activity() {
         old.removeCallbacks(videoWatch)
         old.removeCallbacks(frameWatch)
         old.removeCallbacks(fsWatch)
-        // 上一个台子的 40 秒兜底也要清：留着会在新页面加载中途把黑幕掀开
+        // 上一个台子的起播超时也要清：留着会在新页面加载中途把黑幕掀开
         old.removeCallbacks(coverTimeout)
         (customView?.parent as? ViewGroup)?.removeView(customView)
         customView = null
@@ -703,65 +788,6 @@ class MainActivity : Activity() {
         webView = fresh
         setupWebView()
     }
-
-    // ---------- 频道文件（txt，分组格式：分组名,#genre#） ----------
-
-    private fun channelsFile(): File? = getExternalFilesDir(null)?.let { File(it, CHANNEL_FILE) }
-
-    /** 读频道文本：外部文件优先，没有就用 assets 里的默认频道 */
-    private fun loadChannelsText(): String {
-        val f = channelsFile()
-        if (f != null && f.isFile) {
-            runCatching { return f.readText(Charsets.UTF_8) }
-        }
-        return runCatching {
-            assets.open(CHANNEL_FILE).bufferedReader(Charsets.UTF_8).readText()
-        }.getOrDefault("")
-    }
-
-    /**
-     * 解析频道文本：
-     *  - “分组名,#genre#”开一个分组（DIYP txt 格式）
-     *  - “频道名称,频道地址,台标名称,清晰度”一行一个，后两列可省略（台标名默认取频道名称，清晰度默认 HD），地址后可加 “$分组名”
-     *  - “#”开头为注释；分组之前的内容归“其他频道”
-     */
-    private fun parseChannels(text: String): List<Channel> {
-        val out = mutableListOf<Channel>()
-        var group = ""
-        text.lineSequence().forEachIndexed { idx, raw ->
-            val t = raw.trim()
-            if (t.isEmpty() || t.startsWith("#")) return@forEachIndexed
-            val parts = t.split(',')
-            val name = parts[0].trim()
-            if (name.isEmpty() || parts.size < 2) return@forEachIndexed
-            if (parts[1].trim() == "#genre#") {
-                group = name
-                return@forEachIndexed
-            }
-            val urlField = parts[1].trim()
-            val dollar = urlField.indexOf('$')
-            val url = (if (dollar >= 0) urlField.substring(0, dollar) else urlField).trim()
-            val g = (if (dollar >= 0) urlField.substring(dollar + 1).trim() else group)
-                .ifEmpty { "其他频道" }
-            val logo = parts.getOrElse(2) { "" }.trim().ifEmpty { name }
-            val quality = parts.getOrElse(3) { "" }.trim().ifEmpty { "HD" }
-            if (url.isNotEmpty()) {
-                out += Channel(name, url, idx, g, logo, quality)
-            }
-        }
-        return out
-    }
-
-    private data class Channel(
-        val name: String,
-        val url: String,
-        val line: Int,
-        val group: String,
-        val logo: String,
-        val quality: String
-    )
-
-    private data class Group(val name: String, val channels: List<Channel>)
 
     /** 沉浸式全屏：隐藏状态栏和导航栏 */
     private fun hideSystemUi() {
@@ -876,19 +902,11 @@ class MainActivity : Activity() {
                 val url = request?.url ?: return false
                 val scheme = url.scheme?.lowercase()
                 return if (scheme == "http" || scheme == "https") {
-                    // 打开外部页面：先盖上过渡动画
-                    showTransitionCover()
+                    // 打开外部页面：还没进入过直播才盖过渡动画（进入后跳转不再黑屏）
+                    if (!liveEntered) showTransitionCover()
                     false
                 } else if (scheme == "file") {
                     false // 本地错误页，留在应用内打开
-                } else if (scheme == "tvhome") {
-                    // 错误页里的“回到首页”：回到第一个频道
-                    val first = groups.asSequence().flatMap { it.channels.asSequence() }.firstOrNull()
-                    if (first != null) {
-                        playingLine = first.line
-                        openChannel(first.url)
-                    }
-                    true
                 } else {
                     try {
                         startActivity(Intent(Intent.ACTION_VIEW, url))
@@ -918,6 +936,13 @@ class MainActivity : Activity() {
                 if (host != null && TRACKING_HOSTS.any { host == it || host.endsWith(".$it") }) {
                     Log.d(TAG, "block tracking: $url")
                     return emptyResponse("script")
+                }
+
+                // mp4 广告视频、ico 图标：页面不需要加载，直接回空响应拦掉
+                val ext = url.path?.lowercase() ?: ""
+                if (ext.endsWith(".mp4") || ext.endsWith(".ico")) {
+                    Log.d(TAG, "block asset: $url")
+                    return emptyResponse(if (ext.endsWith(".ico")) "image" else "video")
                 }
 
                 val dest = request.requestHeaders.entries
@@ -965,7 +990,7 @@ class MainActivity : Activity() {
                 docUrl = if (isLivePage) url else null
                 pageInputBlocked = isLivePage
                 if (isLivePage) {
-                    showTransitionCover()
+                    if (!liveEntered) showTransitionCover()
                 } else {
                     // 回到本地首页 / 错误页：不再需要过渡动画，也不屏蔽操作
                     hideTransitionCover()
@@ -975,8 +1000,8 @@ class MainActivity : Activity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 if (url != null && url.startsWith("about:")) return
-                // 兜底：视频全屏还没触发时，过渡动画一直盖着
-                if (customView == null && url != null && url.startsWith("http")) {
+                // 兜底：视频全屏还没触发时，过渡动画一直盖着（已进入过就不再盖）
+                if (customView == null && !liveEntered && url != null && url.startsWith("http")) {
                     showTransitionCover()
                 }
                 // 诊断：报告页面里 video 元素状态与全屏调用结果
@@ -1009,19 +1034,38 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * 呼出面板的按键要抢在 WebView 之前处理：直播页里的 video 控件会吞掉 OK/方向键，
+     * 事件根本走不到 onKeyDown，遥控器就成了哑巴。
+     * 抬起的那一下也要吃掉：面板刚展开，光标已经落在频道行上，
+     * 让 UP 继续走下去等于刚呼出面板就替用户选了个台。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) openKeyUp = false
+        if (!panelOpen && !pairingOpen &&
+            event.action == KeyEvent.ACTION_DOWN &&
+            event.keyCode in PANEL_KEYS && ChannelStore.channels().isNotEmpty()
+        ) {
+            showPanel()
+            openKeyUp = true
+            return true
+        }
+        if (openKeyUp && event.action == KeyEvent.ACTION_UP) {
+            openKeyUp = false
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            // 遮罩里：光标在频道列表 → 退回分组卡片；已在分组卡片 → 收起遮罩
+            // 配对页盖在最上层：返回先收它，别一路退到退出应用
+            if (pairingOpen) {
+                hidePairing()
+                return true
+            }
             if (panelOpen) {
-                val focused = currentFocus
-                val panel = groupRow.getChildAt(curGroupIdx)
-                if (panel != null && focused != null && focused !== panel &&
-                    isDescendantOf(panel, focused)
-                ) {
-                    focusGroupCard(curGroupIdx)
-                } else {
-                    hidePanel()
-                }
+                hidePanel()
                 return true
             }
             // 网页视频全屏：返回 = 退出全屏
@@ -1032,15 +1076,6 @@ class MainActivity : Activity() {
             finish()
             return true
         }
-        // 无遮罩时按 OK / 上下键 → 呼出遮罩（网页按键本来就被屏蔽）
-        if (!panelOpen &&
-            (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER ||
-                keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || keyCode == KeyEvent.KEYCODE_DPAD_UP ||
-                keyCode == KeyEvent.KEYCODE_DPAD_DOWN)
-        ) {
-            showPanel()
-            return true
-        }
         // 直播网页里屏蔽一切页面操作（方向键/OK/Tab），只看视频
         if (pageInputBlocked && keyCode in BLOCKED_PAGE_KEYS) {
             return true
@@ -1048,38 +1083,48 @@ class MainActivity : Activity() {
         return super.onKeyDown(keyCode, event)
     }
 
-    private fun isDescendantOf(parent: View, v: View): Boolean {
-        var p: View? = v.parent as? View
-        while (p != null) {
-            if (p === parent) return true
-            p = p.parent as? View
+    /** 从登录页返回：登录 cookie 已写进共享 CookieManager，重载当前频道让它生效 */
+    override fun onResume() {
+        super.onResume()
+        // 前台才接配置服务的界面动作；退到后台让给登录页或干脆无人应答
+        TvApp.instance.host = this
+        // 换过网络后 IP 会变，回到前台就把配对页上的地址和二维码刷成当前值
+        if (pairingOpen) pairing?.refresh(configUrl(), ChannelStore.pin)
+        if (needReloadAfterLogin) {
+            needReloadAfterLogin = false
+            playingChannel()?.let { openChannel(it.url) }
         }
-        return false
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (TvApp.instance.host === this) TvApp.instance.host = null
     }
 
     /**
      * 直播画面里屏蔽网页触摸；手机/电视点一下屏幕即可呼出遮罩
-     * （遮罩打开时触摸全部交给原生面板，点分组卡片以外的空白处关闭）
+     * （遮罩打开时触摸全部交给原生面板，点面板本体以外的空白处关闭）
      */
     override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
         if (ev == null) return super.dispatchTouchEvent(ev)
-        if (!pageInputBlocked || panelOpen) {
-            if (panelOpen) {
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        tapX = ev.x
-                        tapY = ev.y
-                        tapDownAt = SystemClock.uptimeMillis()
-                    }
-                    MotionEvent.ACTION_UP ->
-                        if (isTap(ev.x, ev.y) && !inGroupCard(ev.x, ev.y) && !inInfoPanel(ev.x, ev.y)) {
-                            hidePanel()
-                            return true
-                        }
+        if (panelOpen) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    tapX = ev.x
+                    tapY = ev.y
+                    tapDownAt = SystemClock.uptimeMillis()
                 }
+                MotionEvent.ACTION_UP ->
+                    if (isTap(ev.x, ev.y) && !inPanelCard(ev.x, ev.y)) {
+                        hidePanel()
+                        return true
+                    }
             }
             return super.dispatchTouchEvent(ev)
         }
+        // 配对页上的控件要能点，触摸照旧下发
+        if (pairingOpen) return super.dispatchTouchEvent(ev)
+        // 错误页/首页不是 http 页面，但同样只用于点屏呼出面板（页面本身没有可点元素）
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 tapX = ev.x
@@ -1095,25 +1140,12 @@ class MainActivity : Activity() {
         kotlin.math.hypot((x - tapX).toDouble(), (y - tapY).toDouble()) < 40 &&
             SystemClock.uptimeMillis() - tapDownAt < 400
 
-    /** 触点是否落在左侧信息栏：它是面板的一部分，点它不该收起面板 */
-    private fun inInfoPanel(x: Float, y: Float): Boolean {
+    /** 两列卡片和抽屉都属于面板本体，只有点到四周压暗的空白处才收起 */
+    private fun inPanelCard(x: Float, y: Float): Boolean {
         val loc = IntArray(2)
-        infoPanel.getLocationInWindow(loc)
-        return x >= loc[0] && x <= loc[0] + infoPanel.width &&
-            y >= loc[1] && y <= loc[1] + infoPanel.height
-    }
-
-    /** 触点是否落在某张分组卡片上（卡片被 coverflow 缩放过，按实际绘制范围算） */
-    private fun inGroupCard(x: Float, y: Float): Boolean {
-        val loc = IntArray(2)
-        for (i in 0 until groupRow.childCount) {
-            val ch = groupRow.getChildAt(i)
-            ch.getLocationInWindow(loc)
-            if (x >= loc[0] && x <= loc[0] + ch.width * ch.scaleX &&
-                y >= loc[1] && y <= loc[1] + ch.height * ch.scaleY
-            ) return true
-        }
-        return false
+        panelBody.getLocationInWindow(loc)
+        return x >= loc[0] && x <= loc[0] + panelBody.width &&
+            y >= loc[1] && y <= loc[1] + panelBody.height
     }
 
     /** 退出网页视频全屏：先渐进盖上过渡黑屏，切回网页后再渐进退出 */
@@ -1149,7 +1181,8 @@ class MainActivity : Activity() {
     /** 打开外部页面前的过渡：黑屏盖住网页，直到视频首帧才渐退（层级在面板之下） */
     private fun showTransitionCover() {
         // 黑幕可能还压着上一个起不来的页面：这里不能直接 return，
-        // 必须重新起轮询并续上兜底超时，否则新页面能播也永远等不到首帧探测，黑幕一直盖着
+        // 必须重新起轮询（超时已排过就不重排，计时始终从点台那一下算），
+        // 否则新页面能播也永远等不到首帧探测，黑幕一直盖着
         val cover = transitionCover ?: FrameLayout(this).apply {
             setBackgroundColor(0xFF000000.toInt())
             alpha = 0f
@@ -1172,8 +1205,7 @@ class MainActivity : Activity() {
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
         webView.postDelayed(videoWatch, 400)
-        webView.removeCallbacks(coverTimeout)
-        webView.postDelayed(coverTimeout, 40_000)
+        armPlayTimeout()
     }
 
     /** 退出 CSS 全屏（把视频放回页面原位置） */
@@ -1190,7 +1222,7 @@ class MainActivity : Activity() {
         Log.d(TAG, "cover fade out")
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
-        webView.removeCallbacks(coverTimeout)
+        disarmPlayTimeout()
         webView.removeCallbacks(fsWatch)
         webView.postDelayed(fsWatch, 1000)
         cover.animate().cancel()
@@ -1216,6 +1248,7 @@ class MainActivity : Activity() {
             "font" -> "font/woff2"
             "script" -> "text/javascript"
             "map", "manifest" -> "application/json"
+            "video" -> "video/mp4"
             else -> "image/png"
         }
         return WebResourceResponse(mime, "UTF-8", ByteArrayInputStream(ByteArray(0)))
@@ -1389,20 +1422,21 @@ class MainActivity : Activity() {
         }
     }
 
-    private companion object {
+    companion object {
         const val TAG = "TvWeb"
         const val ERROR_URL = "file:///android_asset/error.html"
 
-        // 频道列表文件（txt）：“分组名,#genre#” + 每行 “频道名称,频道地址”
-        const val CHANNEL_FILE = "channels.txt"
+        // 起播超时：点台后这么久还没等到视频首帧，就关掉网页显示错误页
+        const val PLAY_TIMEOUT_MS = 10_000L
+        const val PLAY_ERROR_TEXT = "该频道暂时无法播放"
 
         // 焦点记忆存储名
         const val PREFS = "panel_focus"
 
-        // PC 桌面浏览器 UA：网站才会下发电脑版网页布局而不是 app/手机版
+        // 桌面浏览器 UA：网站才会下发电脑版网页布局而不是 app/手机版
         const val TV_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
 
         // 总开关：是否拦截网页的 CSS / 图片 / 字体资源
         const val BLOCK_STYLE_RESOURCES = true
@@ -1432,8 +1466,8 @@ class MainActivity : Activity() {
             "Cache-Control", "ETag", "Last-Modified", "Vary"
         )
 
-        // 调试浮层开关：显示页面里每个 video 的 src（排查广告 video 用）
-        const val DEBUG_SHOW_VIDEO_INFO = true
+        // 调试浮层开关：显示页面里每个 video 的 src（排查广告 video 用），需要时再打开
+        const val DEBUG_SHOW_VIDEO_INFO = false
 
         // 列出页面所有 video 的 src 与状态
         val DEBUG_INFO_JS = """
@@ -1442,12 +1476,22 @@ class MainActivity : Activity() {
               var vs = document.querySelectorAll('video');
               for (var i = 0; i < vs.length; i++) {
                 var v = vs[i];
-                var s = v.getAttribute('src') || v.currentSrc || v.src || '';
                 var r = v.getBoundingClientRect();
-                out.push('v' + i + ': ' + s.slice(0, 90));
+                var attr = v.getAttribute('src') || '-';
+                var prop = v.src || '-';
+                var cur = v.currentSrc || '-';
+                var obj = v.srcObject ? String(v.srcObject) : '-';
+                out.push('v' + i + ' attr=' + attr.slice(0, 40));
+                out.push('   src=' + prop.slice(0, 40));
+                out.push('   cur=' + cur.slice(0, 40));
+                out.push('   obj=' + obj.slice(0, 40));
                 out.push('   paused=' + v.paused + ' size=' +
                   Math.round(r.width) + 'x' + Math.round(r.height) +
                   ' t=' + v.currentTime.toFixed(1) + (v.muted ? ' muted' : ''));
+                out.push('   vw=' + v.videoWidth + 'x' + v.videoHeight + ' rs=' + v.readyState +
+                  ' tracks=' + (v.srcObject && v.srcObject.getTracks
+                    ? v.srcObject.getTracks().map(function (t) { return t.kind; }).join(',')
+                    : '-'));
               }
               return out.length ? out.join('\n') : '(no video)';
             })();
@@ -1460,12 +1504,15 @@ class MainActivity : Activity() {
         // （blob: 或 m3u8/flv/mp4 等地址），覆盖样式铺满 100% 后全屏；每轮复选并尝试 play()。
         val APPLY_FS_JS = """
             (function () {
-              // src 是可播放地址：blob: 或 m3u8/mpd/flv/mp4 等媒体后缀
+              // 这个 video 是不是真的在放画面：
+              // 1) src 是 blob: 或媒体后缀（MSE / 直连流）
+              // 2) 或者元素已经解出帧（videoWidth>0）——播放器把 MediaStream 挂到
+              //    srcObject 上时三个 src 全是空，光看 src 会把它当成不存在
               function playableSrc(v) {
                 var s = v.getAttribute('src') || v.currentSrc || v.src || '';
-                if (!s) return null;
                 if (s.indexOf('blob:') === 0) return s;
                 if (/\.(m3u8|mpd|flv|mp4|webm|ogg|ogv|ts|mp3|m4a|aac|wav)(\?|#|&|$)/i.test(s)) return s;
+                if (v.videoWidth > 0) return 'frame';
                 return null;
               }
               // 在页面（含同源 iframe）里选面积最大的可播放 video
@@ -1543,24 +1590,32 @@ class MainActivity : Activity() {
                 return '1';
               }
 
-              // 页面重渲染换掉了 video 元素：把旧的放回，换第一个进全屏容器
-              if (cur) {
+              // 页面里换成了另一个更大的 video（如抖音：广告 → 正片）。
+              // 复用现有全屏容器：把旧 video 放回原处、把新 video 移进同一个 #000 容器，
+              // 不销毁容器 → 不会出现第二次“黑屏进入”闪烁。
+              if (cur && cur.wrap && cur.wrap.parentNode) {
+                var newParent = v.parentNode, newNext = v.nextSibling, newCss = v.style.cssText;
                 try {
-                  if (cur.el) cur.el.style.cssText = cur.css || '';
-                  if (cur.el && cur.parent) {
-                    if (cur.next && cur.next.parentNode === cur.parent) {
-                      cur.parent.insertBefore(cur.el, cur.next);
-                    } else {
-                      cur.parent.appendChild(cur.el);
+                  if (cur.el) {
+                    cur.el.style.cssText = cur.css || '';
+                    if (cur.parent) {
+                      if (cur.next && cur.next.parentNode === cur.parent) {
+                        cur.parent.insertBefore(cur.el, cur.next);
+                      } else {
+                        cur.parent.appendChild(cur.el);
+                      }
                     }
                   }
-                  if (cur.wrap && cur.wrap.parentNode) {
-                    cur.wrap.parentNode.removeChild(cur.wrap);
-                  }
-                } catch (e) {}
-                window.__tvFs = null;
+                  cur.wrap.appendChild(v);
+                  applyStyles(v);
+                } catch (e) { return '0'; }
+                window.__tvFs = { el: v, parent: newParent, next: newNext, css: newCss, wrap: cur.wrap };
+                tryPlay(v);
+                console.log('[tvfs] switched video inside existing wrap');
+                return '1';
               }
 
+              // 还没有全屏容器：新建一个
               var wrap = document.createElement('div');
               wrap.setAttribute('data-tvfs', '1');
               wrap.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;' +
@@ -1675,6 +1730,13 @@ class MainActivity : Activity() {
               return JSON.stringify(out);
             })();
         """
+
+        // 无面板时按这几键呼出频道面板（MENU 是不少电视遥控器的“菜单”键）
+        val PANEL_KEYS = intArrayOf(
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU
+        )
 
         // 直播网页里要屏蔽的按键（方向键/OK/Tab），音量键等系统键不受影响
         val BLOCKED_PAGE_KEYS = intArrayOf(
