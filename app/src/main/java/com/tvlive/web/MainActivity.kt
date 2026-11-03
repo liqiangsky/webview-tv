@@ -174,8 +174,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // fsWatch(1000ms)    —— 进入后持续跟随：换源/广告→正片时复用同一容器换 video，
     //                      并把播放器重写的样式重新落实
     // 只进入一次黑幕     —— liveEntered 置位后，onPageStarted / shouldOverrideUrlLoading
-    //                      / onPageFinished 里都不再 showTransitionCover，抖音这类
-    //                      连续重定向/换源就不会反复黑屏
+    //                      / onPageFinished 里都不再 showTransitionCover，页面连续
+    //                      重定向/换源就不会反复黑屏
     // 登录态共享         —— 所有 WebView 共用全局 CookieManager，同域名登录自动携带
     // ============================================================================
 
@@ -222,7 +222,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     }
 
     // 起播兜底：点台后 10 秒内没等到视频首帧，就当这个台起不来，收黑幕并显示错误页。
-    // 计时只在 openChannel 起一次，页面中途重定向/换源不再续表（抖音这类会一直跳）
+    // 计时只在 openChannel 起一次，页面中途重定向/换源不再续表（有些页面会一直跳）
     private val coverTimeout = Runnable {
         playTimeoutArmed = false
         if (customView == null && transitionCover != null) {
@@ -1590,7 +1590,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 return '1';
               }
 
-              // 页面里换成了另一个更大的 video（如抖音：广告 → 正片）。
+              // 页面里换成了另一个更大的 video（典型情形：广告 → 正片换源）。
               // 复用现有全屏容器：把旧 video 放回原处、把新 video 移进同一个 #000 容器，
               // 不销毁容器 → 不会出现第二次“黑屏进入”闪烁。
               if (cur && cur.wrap && cur.wrap.parentNode) {
