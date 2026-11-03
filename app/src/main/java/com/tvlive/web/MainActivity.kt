@@ -1473,6 +1473,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         val DEBUG_INFO_JS = """
             (function () {
               var out = [];
+              var bt = (document.body ? (document.body.innerText || '') : '').replace(/\s+/g, ' ');
+              out.push('url=' + location.href.slice(0, 60));
+              out.push('title=' + (document.title || '-').slice(0, 30) + ' txt=' + bt.slice(0, 70));
               var vs = document.querySelectorAll('video');
               for (var i = 0; i < vs.length; i++) {
                 var v = vs[i];
@@ -1492,6 +1495,47 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   ' tracks=' + (v.srcObject && v.srcObject.getTracks
                     ? v.srcObject.getTracks().map(function (t) { return t.kind; }).join(',')
                     : '-'));
+              }
+              // 诊断用：视口尺寸 / iframe / 全屏容器实际覆盖范围
+              out.push('vw=' + window.innerWidth + 'x' + window.innerHeight +
+                ' doc=' + document.documentElement.clientWidth + 'x' +
+                document.documentElement.clientHeight +
+                ' scr=' + screen.width + 'x' + screen.height +
+                ' dpr=' + window.devicePixelRatio);
+              var vv = window.visualViewport;
+              if (vv) {
+                out.push('vv=' + Math.round(vv.width) + 'x' + Math.round(vv.height) +
+                  ' scale=' + vv.scale + ' off=' + Math.round(vv.offsetLeft) + ',' +
+                  Math.round(vv.offsetTop) + ' page=' + Math.round(vv.pageWidth) + 'x' +
+                  Math.round(vv.pageHeight));
+              } else out.push('vv none');
+              out.push('scroll=' + document.documentElement.scrollWidth + 'x' +
+                document.documentElement.scrollHeight);
+              var bb = document.body ? document.body.getBoundingClientRect() : null;
+              out.push('zoom html=' + getComputedStyle(document.documentElement).zoom +
+                ' body=' + (document.body ? getComputedStyle(document.body).zoom : '-') +
+                ' bodyRect=' + (bb ? Math.round(bb.width) + 'x' + Math.round(bb.height) +
+                  ' @' + Math.round(bb.left) + ',' + Math.round(bb.top) : '-'));
+              var ifs = document.querySelectorAll('iframe');
+              for (var k = 0; k < ifs.length; k++) {
+                var ri = ifs[k].getBoundingClientRect();
+                var sameOrigin = false;
+                try { sameOrigin = !!ifs[k].contentDocument; } catch (e) {}
+                out.push('iframe' + k + ' ' + Math.round(ri.width) + 'x' + Math.round(ri.height) +
+                  ' @' + Math.round(ri.left) + ',' + Math.round(ri.top) +
+                  ' same=' + sameOrigin + ' v=' + (sameOrigin ?
+                    ifs[k].contentDocument.querySelectorAll('video').length : -1) +
+                  ' src=' + (ifs[k].getAttribute('src') || '-').slice(0, 30));
+              }
+              var s = window.__tvFs;
+              if (s && s.wrap) {
+                var rw = s.wrap.getBoundingClientRect();
+                out.push('wrap ' + Math.round(rw.width) + 'x' + Math.round(rw.height) +
+                  ' @' + Math.round(rw.left) + ',' + Math.round(rw.top) +
+                  ' inDoc=' + (s.wrap.ownerDocument === document) +
+                  ' elDoc=' + (s.el ? (s.el.ownerDocument === document) : '?'));
+              } else {
+                out.push('wrap none');
               }
               return out.length ? out.join('\n') : '(no video)';
             })();
@@ -1560,6 +1604,17 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 };
                 step();
               }
+              // 全屏容器要铺满“看得见的那块”，而页面报的几种尺寸都可能是别的数：
+              // 没有 viewport meta 的页面布局视口只有 980 宽（100vw 就按它算，只够半屏）；
+              // 按设计稿反向缩放的页面 innerWidth 又比屏幕大一圈（铺满会溢出，画面被顶出
+              // 屏幕、文档滚动区跟着变大）。visualViewport 报的才是可视区，两种页面都对得上；
+              // 老 WebView 没有它时退回原来的 100vw 行为。
+              function fitWrap(wrap) {
+                var vv = window.visualViewport;
+                if (!vv || !(vv.width > 0) || !(vv.height > 0)) return;
+                wrap.style.width = Math.round(vv.width) + 'px';
+                wrap.style.height = Math.round(vv.height) + 'px';
+              }
               // 播放器可能会反复重写 video 的行内样式，每次都要重新落实
               function applyStyles(el) {
                 el.style.setProperty('position', 'static', 'important');
@@ -1585,6 +1640,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               var cur = window.__tvFs;
               if (cur && cur.el === v && cur.wrap && cur.wrap.parentNode) {
                 applyStyles(v);
+                fitWrap(cur.wrap);
                 // 播放器可能把 video 暂停了：每轮都确保在播
                 tryPlay(v);
                 return '1';
@@ -1608,6 +1664,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   }
                   cur.wrap.appendChild(v);
                   applyStyles(v);
+                  fitWrap(cur.wrap);
                 } catch (e) { return '0'; }
                 window.__tvFs = { el: v, parent: newParent, next: newNext, css: newCss, wrap: cur.wrap };
                 tryPlay(v);
@@ -1621,6 +1678,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               wrap.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;' +
                 'background:#000;z-index:2147483647;display:flex;align-items:center;' +
                 'justify-content:center;overflow:hidden;';
+              fitWrap(wrap);
 
               var state = { el: v, parent: v.parentNode, next: v.nextSibling, css: v.style.cssText };
               try {
