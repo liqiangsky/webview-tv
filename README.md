@@ -59,7 +59,7 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 - **门禁**：写接口必须带 `X-Pin` 请求头（或 `?pin=`）且与屏幕上显示的配对码一致；配对码可在电视上「换一组」
 - **读**：`GET /` 配置页，`GET /api/state` 回当前分组、频道、登录网址与在播状态
 - **写**（`POST /api`，`{"op":..}`）：`ch.add` / `ch.upd` / `ch.del` / `ch.import` / `ch.clear` /
-  `group.rename` / `group.del` / `login.add` / `login.del` / `pin.regenerate`，
+  `group.add` / `group.rename` / `group.del` / `login.add` / `login.del` / `pin.regenerate`，
   另有 `play`、`login.open` 让手机直接遥控电视
 - 数据变更后 `ChannelStore.onChanged` 回主线程重画面板，手机改完电视立刻可见
 

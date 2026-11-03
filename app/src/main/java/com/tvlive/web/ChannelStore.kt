@@ -15,6 +15,9 @@ import kotlin.random.Random
  *   channels.txt —— DIYP txt 格式（“分组名,#genre#” + 每行“名称,地址[,台标,清晰度]”）
  *   logins.txt   —— 每行“名称,地址”
  *
+ * 分组就是文件里的“分组名,#genre#”标题行，底下没有频道也照样成立，所以空分组
+ * 存得下来，不必另加一张表。
+ *
  * 出厂不带任何频道：首次运行两个文件都不存在，列表为空，引导用户去配置页添加。
  */
 object ChannelStore {
@@ -44,26 +47,45 @@ object ChannelStore {
     private fun channelsFile() = File(dir, CHANNEL_FILE)
     private fun loginFile() = File(dir, LOGIN_FILE)
 
+    /** 分组顺序和频道一起读、一起写 */
+    private class Db(val groups: MutableList<String>, val channels: MutableList<Channel>)
+
+    private fun fail(msg: String): Result<Unit> = Result.failure(IllegalArgumentException(msg))
+
     // ---------------- 频道 ----------------
 
-    fun channels(): List<Channel> = readChannels()
+    fun channels(): List<Channel> = readDb().channels
 
+    /** 分组以文件里的 #genre# 标题行为准，空分组也会出现在列表里 */
     fun groups(): List<Group> {
+        val db = readDb()
         val map = LinkedHashMap<String, MutableList<Channel>>()
-        for (ch in readChannels()) map.getOrPut(ch.group) { mutableListOf() }.add(ch)
+        for (name in db.groups) map[name] = mutableListOf()
+        for (ch in db.channels) map.getOrPut(ch.group) { mutableListOf() }.add(ch)
         return map.map { Group(it.key, it.value) }
     }
 
+    fun addGroup(name: String): Result<Unit> = mutateDb { db ->
+        val n = name.trim()
+        when {
+            n.isEmpty() -> fail("分组名不能为空")
+            db.groups.any { it == n } -> fail("分组已存在")
+            else -> {
+                db.groups += n
+                Result.success(Unit)
+            }
+        }
+    }
+
     fun addChannel(group: String, name: String, url: String, quality: String): Result<Unit> =
-        mutate { list ->
+        mutateDb { db ->
             when {
-                name.isBlank() || url.isBlank() ->
-                    Result.failure(IllegalArgumentException("名称和地址不能为空"))
-                list.any { it.name == name && it.url == url } ->
-                    Result.failure(IllegalArgumentException("该频道已存在"))
+                name.isBlank() || url.isBlank() -> fail("名称和地址不能为空")
+                db.channels.any { it.name == name && it.url == url } -> fail("该频道已存在")
                 else -> {
-                    list += Channel(name.trim(), url.trim(), -1,
-                        group.ifBlank { "其他频道" }.trim(), name.trim(),
+                    val g = group.ifBlank { "其他频道" }.trim()
+                    if (db.groups.none { it == g }) db.groups += g
+                    db.channels += Channel(name.trim(), url.trim(), -1, g, name.trim(),
                         quality.ifBlank { "HD" }.trim())
                     Result.success(Unit)
                 }
@@ -74,19 +96,21 @@ object ChannelStore {
     fun updateChannel(
         line: Int, group: String, name: String, url: String,
         newGroup: String, newName: String, newUrl: String, newQuality: String
-    ): Result<Unit> = mutate { list ->
+    ): Result<Unit> = mutateDb { db ->
+        val list = db.channels
         val i = indexOf(list, line, group, name, url)
         when {
-            i < 0 -> Result.failure(IllegalArgumentException("频道不存在，请刷新后重试"))
+            i < 0 -> fail("频道不存在，请刷新后重试")
             else -> {
                 val old = list[i]
                 val finalName = newName.ifBlank { old.name }.trim()
                 val finalUrl = newUrl.ifBlank { old.url }.trim()
-                if (finalName.isEmpty() || finalUrl.isEmpty())
-                    return@mutate Result.failure(IllegalArgumentException("名称和地址不能为空"))
+                if (finalName.isEmpty() || finalUrl.isEmpty()) return@mutateDb fail("名称和地址不能为空")
+                val g = newGroup.ifBlank { old.group }.trim()
+                if (db.groups.none { it == g }) db.groups += g
                 list[i] = old.copy(
                     name = finalName, url = finalUrl,
-                    group = newGroup.ifBlank { old.group }.trim(),
+                    group = g,
                     logo = if (newName.isBlank()) old.logo else finalName,
                     quality = newQuality.ifBlank { old.quality }.trim()
                 )
@@ -96,11 +120,11 @@ object ChannelStore {
     }
 
     fun deleteChannel(line: Int, group: String, name: String, url: String): Result<Unit> =
-        mutate { list ->
-            val i = indexOf(list, line, group, name, url)
-            if (i < 0) Result.failure(IllegalArgumentException("频道不存在，请刷新后重试"))
+        mutateDb { db ->
+            val i = indexOf(db.channels, line, group, name, url)
+            if (i < 0) fail("频道不存在，请刷新后重试")
             else {
-                list.removeAt(i)
+                db.channels.removeAt(i)
                 Result.success(Unit)
             }
         }
@@ -108,15 +132,19 @@ object ChannelStore {
     /** 整段导入：append 追加到现有列表之后，replace 覆盖全部 */
     fun importChannels(text: String, replace: Boolean): Result<Int> {
         val parsed = parse(text)
-        if (parsed.isEmpty()) return Result.failure(IllegalArgumentException("没有解析出任何频道"))
-        return mutateImported { list ->
-            if (replace) list.clear()
-            val seen = list.mapTo(HashSet()) { it.name + '\u0000' + it.url }
+        if (parsed.channels.isEmpty())
+            return Result.failure(IllegalArgumentException("没有解析出任何频道"))
+        return mutateDb { db ->
+            if (replace) {
+                db.groups.clear()
+                db.channels.clear()
+            }
+            for (g in parsed.groups) if (db.groups.none { it == g }) db.groups += g
+            val seen = db.channels.mapTo(HashSet()) { it.name + '\u0000' + it.url }
             var added = 0
-            for (ch in parsed) {
-                val key = ch.name + '\u0000' + ch.url
-                if (seen.add(key)) {
-                    list += ch
+            for (ch in parsed.channels) {
+                if (seen.add(ch.name + '\u0000' + ch.url)) {
+                    db.channels += ch
                     added++
                 }
             }
@@ -124,27 +152,36 @@ object ChannelStore {
         }
     }
 
-    fun clearChannels(): Result<Unit> = mutate { list ->
-        list.clear()
+    /** 只清频道，分组留着：空分组是用户自己建的，不该被顺手删掉 */
+    fun clearChannels(): Result<Unit> = mutateDb { db ->
+        db.channels.clear()
         Result.success(Unit)
     }
 
-    fun renameGroup(old: String, new: String): Result<Unit> {
-        if (new.isBlank()) return Result.failure(IllegalArgumentException("分组名不能为空"))
-        return mutate { list ->
-            var hit = false
-            for (i in list.indices) if (list[i].group == old) {
-                list[i] = list[i].copy(group = new.trim()); hit = true
+    fun renameGroup(old: String, new: String): Result<Unit> = mutateDb { db ->
+        val n = new.trim()
+        val i = db.groups.indexOf(old)
+        when {
+            n.isEmpty() -> fail("分组名不能为空")
+            i < 0 -> fail("分组不存在")
+            db.groups.any { it == n } -> fail("分组已存在")
+            else -> {
+                db.groups[i] = n
+                for (k in db.channels.indices)
+                    if (db.channels[k].group == old) db.channels[k] = db.channels[k].copy(group = n)
+                Result.success(Unit)
             }
-            if (hit) Result.success(Unit) else Result.failure(IllegalArgumentException("分组不存在"))
         }
     }
 
-    fun deleteGroup(name: String): Result<Unit> = mutate { list ->
-        val before = list.size
-        list.removeAll { it.group == name }
-        if (list.size == before) Result.failure(IllegalArgumentException("分组不存在"))
-        else Result.success(Unit)
+    fun deleteGroup(name: String): Result<Unit> = mutateDb { db ->
+        val i = db.groups.indexOf(name)
+        if (i < 0 && db.channels.none { it.group == name }) fail("分组不存在")
+        else {
+            if (i >= 0) db.groups.removeAt(i)
+            db.channels.removeAll { it.group == name }
+            Result.success(Unit)
+        }
     }
 
     private fun indexOf(list: List<Channel>, line: Int, group: String, name: String, url: String): Int {
@@ -156,38 +193,28 @@ object ChannelStore {
     }
 
     /** 读→改→写全在同一把锁里，避免两个 HTTP 请求并发覆盖 */
-    private fun mutate(block: (MutableList<Channel>) -> Result<Unit>): Result<Unit> =
+    private fun <T> mutateDb(block: (Db) -> Result<T>): Result<T> =
         synchronized(lock) {
-            val list = readChannels().toMutableList()
-            val r = block(list)
+            val db = readDb()
+            val r = block(db)
             if (r.isSuccess) {
-                writeText(channelsFile(), serialize(list))
+                writeText(channelsFile(), serialize(db))
                 notifyChanged()
             }
             r
         }
 
-    private fun mutateImported(block: (MutableList<Channel>) -> Result<Int>): Result<Int> =
-        synchronized(lock) {
-            val list = readChannels().toMutableList()
-            val r = block(list)
-            if (r.isSuccess) {
-                writeText(channelsFile(), serialize(list))
-                notifyChanged()
-            }
-            r
-        }
-
-    private fun readChannels(): List<Channel> =
+    private fun readDb(): Db =
         parse(runCatching { channelsFile().readText(Charsets.UTF_8) }.getOrDefault(""))
 
     /**
      * 解析频道文本：
-     *  - “分组名,#genre#”开一个分组（DIYP txt 格式）
+     *  - “分组名,#genre#”开一个分组（DIYP txt 格式），后面没有频道也算分组存在
      *  - “频道名称,频道地址,台标名称,清晰度”一行一个，后两列可省略（台标名默认取频道名称，清晰度默认 HD），地址后可加 “$分组名”
      *  - “#”开头为注释；分组之前的内容归“其他频道”
      */
-    private fun parse(text: String): List<Channel> {
+    private fun parse(text: String): Db {
+        val groups = mutableListOf<String>()
         val out = mutableListOf<Channel>()
         var group = ""
         text.lineSequence().forEachIndexed { idx, raw ->
@@ -198,6 +225,7 @@ object ChannelStore {
             if (name.isEmpty() || parts.size < 2) return@forEachIndexed
             if (parts[1].trim() == "#genre#") {
                 group = name
+                if (groups.none { it == name }) groups += name
                 return@forEachIndexed
             }
             val urlField = parts[1].trim()
@@ -205,35 +233,50 @@ object ChannelStore {
             val url = (if (dollar >= 0) urlField.substring(0, dollar) else urlField).trim()
             val g = (if (dollar >= 0) urlField.substring(dollar + 1).trim() else group)
                 .ifEmpty { "其他频道" }
+            if (groups.none { it == g }) groups += g
             val logo = parts.getOrElse(2) { "" }.trim().ifEmpty { name }
             val quality = parts.getOrElse(3) { "" }.trim().ifEmpty { "HD" }
             if (url.isNotEmpty()) out += Channel(name, url, idx, g, logo, quality)
         }
-        return out
+        return Db(groups, out)
     }
 
     /**
-     * 按分组重新落盘。台标与频道同名、清晰度又是 HD 时只写两列，保持文件干净；
+     * 按分组顺序落盘：每个分组一行标题，后面跟它的频道，空分组只留标题。
+     * 台标与频道同名、清晰度又是 HD 时只写两列，保持文件干净；
      * 否则必须写满四列——第三列是台标、第四列是清晰度，跳着写会串位。
      */
-    private fun serialize(list: List<Channel>): String {
+    private fun serialize(db: Db): String {
         val sb = StringBuilder()
-        var group: String? = null
-        for (ch in list) {
-            if (ch.group != group) {
-                group = ch.group
-                sb.append(group).append(",#genre#\n")
+        val left = db.channels.toMutableList()
+        for (group in db.groups) {
+            sb.append(group).append(",#genre#\n")
+            for (ch in left.filter { it.group == group }) {
+                appendChannel(sb, ch)
+                left.remove(ch)
             }
-            sb.append(ch.name).append(',').append(ch.url)
-            val customLogo = ch.logo.isNotEmpty() && ch.logo != ch.name
-            val customQuality = ch.quality.isNotEmpty() && ch.quality != "HD"
-            if (customLogo || customQuality) {
-                sb.append(',').append(if (customLogo) ch.logo else ch.name)
-                sb.append(',').append(if (customQuality) ch.quality else "HD")
+        }
+        // 没登记标题的分组（手工 push 进来的文件、旧数据）照原顺序补上，不能丢频道
+        var extra: String? = null
+        for (ch in left) {
+            if (ch.group != extra) {
+                extra = ch.group
+                sb.append(extra).append(",#genre#\n")
             }
-            sb.append('\n')
+            appendChannel(sb, ch)
         }
         return sb.toString()
+    }
+
+    private fun appendChannel(sb: StringBuilder, ch: Channel) {
+        sb.append(ch.name).append(',').append(ch.url)
+        val customLogo = ch.logo.isNotEmpty() && ch.logo != ch.name
+        val customQuality = ch.quality.isNotEmpty() && ch.quality != "HD"
+        if (customLogo || customQuality) {
+            sb.append(',').append(if (customLogo) ch.logo else ch.name)
+            sb.append(',').append(if (customQuality) ch.quality else "HD")
+        }
+        sb.append('\n')
     }
 
     // ---------------- 登录网址 ----------------
@@ -254,7 +297,7 @@ object ChannelStore {
         if (!u.startsWith("http://") && !u.startsWith("https://"))
             return Result.failure(IllegalArgumentException("地址要以 http:// 或 https:// 开头"))
         return mutateLogins { list ->
-            if (list.any { it.url == u }) Result.failure(IllegalArgumentException("该地址已存在"))
+            if (list.any { it.url == u }) fail("该地址已存在")
             else {
                 list += LoginEntry(name.trim().ifEmpty { hostOf(u) }, u)
                 Result.success(Unit)
@@ -265,8 +308,7 @@ object ChannelStore {
     fun deleteLogin(url: String): Result<Unit> = mutateLogins { list ->
         val before = list.size
         list.removeAll { it.url == url }
-        if (list.size == before) Result.failure(IllegalArgumentException("地址不存在"))
-        else Result.success(Unit)
+        if (list.size == before) fail("地址不存在") else Result.success(Unit)
     }
 
     private fun mutateLogins(block: (MutableList<LoginEntry>) -> Result<Unit>): Result<Unit> =

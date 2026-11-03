@@ -265,6 +265,8 @@ class ConfigServer(
                 .fold({ stateJson(it) }, { fail(it.message ?: "导入失败") })
             "ch.clear" -> return ChannelStore.clearChannels()
                 .fold({ stateJson() }, { fail(it.message ?: "清空失败") })
+            "group.add" -> return ChannelStore.addGroup(arg.str("name"))
+                .fold({ stateJson() }, { fail(it.message ?: "新建失败") })
             "group.rename" -> return ChannelStore.renameGroup(arg.str("old"), arg.str("new"))
                 .fold({ stateJson() }, { fail(it.message ?: "改名失败") })
             "group.del" -> return ChannelStore.deleteGroup(arg.str("name"))
