@@ -114,7 +114,7 @@ class LoginActivity : Activity() {
         webView.requestFocus()
 
         val url = intent.getStringExtra("url")
-        webView.loadUrl(url ?: DEFAULT_URL)
+        if (url != null) webView.loadUrl(url)
         Toast.makeText(this, "登录完成后按返回键退出，播放页会自动刷新登录状态", Toast.LENGTH_LONG).show()
 
         server = RemoteServer(REMOTE_PORT, this::onCommand) { n -> updateStatus(n) }
@@ -412,7 +412,6 @@ class LoginActivity : Activity() {
 
     companion object {
         const val REMOTE_PORT = 8721
-        private const val DEFAULT_URL = "https://www.yangshipin.cn"
         private const val MOVE_SPEED = 1.6f
         private const val SCROLL_PX = 4f
         // 保留桌面 UA，注入 viewport 把布局视口宽度设成页面真实内容宽：
