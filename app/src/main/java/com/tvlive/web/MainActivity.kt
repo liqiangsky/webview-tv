@@ -133,6 +133,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // 页面里的 blob 视频是否已经铺满屏幕（CSS 全屏）
     private var cssFullscreen = false
 
+    // 首帧到位但全屏容器还在改尺寸的起始时刻（0 = 没在等），超宽限期就不再等
+    private var settlingSince = 0L
+
     // 本次进入直播是否已经揭示过画面：为 true 后，页面内部跳转/换源不再盖黑幕（只进入一次）
     private var liveEntered = false
 
@@ -207,10 +210,24 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         override fun run() {
             if (transitionCover == null) return
             webView.evaluateJavascript(FRAME_READY_JS) { result ->
-                if (result?.trim()?.trim('"') == "1") {
-                    Log.d(TAG, "first video frame ready")
-                    liveEntered = true
-                    hideTransitionCover()
+                when (result?.trim()?.trim('"')) {
+                    "1" -> {
+                        settlingSince = 0L
+                        Log.d(TAG, "first video frame ready")
+                        liveEntered = true
+                        hideTransitionCover()
+                    }
+                    // 画面到位但容器还在改尺寸：黑幕再压一会儿，露出来就是稳的。
+                    // 压过宽限期就不再等 —— 不能为了对齐尺寸把画面一直黑着
+                    "2" -> {
+                        if (settlingSince == 0L) settlingSince = SystemClock.uptimeMillis()
+                        if (SystemClock.uptimeMillis() - settlingSince > FRAME_SETTLE_MS) {
+                            Log.d(TAG, "reveal after settle grace")
+                            settlingSince = 0L
+                            liveEntered = true
+                            hideTransitionCover()
+                        }
+                    }
                 }
             }
             webView.postDelayed(this, 250)
@@ -1341,6 +1358,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         }
         cover.animate().cancel()
         cover.alpha = 1f
+        settlingSince = 0L
         // 开始盯页面里的 blob 视频（先清掉可能在旧实例上排队的同一轮询，避免叠成多份）
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
@@ -1568,6 +1586,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
         // 起播超时：点台后这么久还没等到视频首帧，就关掉网页显示错误页
         const val PLAY_TIMEOUT_MS = 10_000L
+        // 首帧到位后黑幕最多再压这么久等容器停稳：页面缩放一般一两拍内就收敛了
+        const val FRAME_SETTLE_MS = 1_200L
         const val PLAY_ERROR_TEXT = "该频道暂时无法播放"
 
         // 焦点记忆存储名
@@ -1752,8 +1772,15 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               function fitWrap(wrap) {
                 var vv = window.visualViewport;
                 if (!vv || !(vv.width > 0) || !(vv.height > 0)) return;
-                wrap.style.width = Math.round(vv.width) + 'px';
-                wrap.style.height = Math.round(vv.height) + 'px';
+                var w = Math.round(vv.width), h = Math.round(vv.height);
+                // 尺寸没变就别重写样式：写一次就是一次布局，轮询里等于白抖
+                if (wrap.__tvW === w && wrap.__tvH === h) return;
+                wrap.__tvW = w; wrap.__tvH = h;
+                // 记一笔“盒子刚改过尺寸”：页面缩放还在飘的时候，容器会按旧 scale 铺，
+                // scale 一变就多撑出去一截，露出来就是画面被顶大/裁掉一下
+                window.__tvFitAt = Date.now();
+                wrap.style.width = w + 'px';
+                wrap.style.height = h + 'px';
               }
               // 播放器可能会反复重写 video 的行内样式，每次都要重新落实
               function applyStyles(el) {
@@ -1778,6 +1805,20 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               var v = pickVideo();
               if (!v) return '0';
               var cur = window.__tvFs;
+              // 起播这几秒里可视区本身会反复变（播放器初始化、弹幕层、系统栏收起都改它），
+              // 只靠一秒一轮的轮询，每轮都得带着错尺寸多撑一会儿，看着就是全屏“跳”两三下，
+              // 而且跳不跳全看这些变化落在揭示前还是揭示后 —— 有时一打开就是对的。
+              // 绑上 resize：可视区一变就立刻重铺，把误差压到一帧内。
+              var vv = window.visualViewport;
+              if (vv && !window.__tvFsBind) {
+                window.__tvFsBind = 1;
+                vv.addEventListener('resize', function () {
+                  var s = window.__tvFs;
+                  if (!s || !s.wrap || !s.wrap.parentNode) return;
+                  fitWrap(s.wrap);
+                  if (s.el) applyStyles(s.el);
+                });
+              }
               if (cur && cur.el === v && cur.wrap && cur.wrap.parentNode) {
                 applyStyles(v);
                 fitWrap(cur.wrap);
@@ -1837,21 +1878,26 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         """
 
         // 全屏容器里的视频是否真的出画面了（首帧呈现 / 兜底播发状态）
+        // '1' = 可以揭幕；'2' = 画面到位但容器还在改尺寸，再等等，别把跳变露给用户；'0' = 还没出帧
         val FRAME_READY_JS = """
             (function () {
               var s = window.__tvFs;
               var v = s && s.el ? s.el : null;
               if (!v) return '0';
+              var ready = false;
               if (v.requestVideoFrameCallback) {
                 if (!v.__tvFrameGot) {
                   try {
                     v.requestVideoFrameCallback(function () { v.__tvFrameGot = 1; });
                   } catch (e) {}
                 }
-                if (v.__tvFrameGot) return '1';
+                ready = !!v.__tvFrameGot;
               }
-              if (v.videoWidth > 0 && v.readyState >= 2 && !v.paused) return '1';
-              return '0';
+              if (!ready) ready = v.videoWidth > 0 && v.readyState >= 2 && !v.paused;
+              if (!ready) return '0';
+              var t = window.__tvFitAt;
+              if (t && Date.now() - t < 400) return '2';
+              return '1';
             })();
         """
 
