@@ -177,7 +177,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     //                      <video>，塞进 #000 fixed 全屏容器、applyStyles 铺满、tryPlay 重试起播。
     //                      返回 '0'=还没找到可播的视频，'1'=已铺满。
     // videoWatch(800ms)  —— 轮询 APPLY_FS_JS，首次返回 '1' 后停轮询、转 frameWatch
-    // frameWatch(250ms)  —— 等首帧真正呈现（FRAME_READY_JS），置 liveEntered=true、
+    // frameWatch(120ms) —— 等首帧真正呈现（FRAME_READY_JS），置 liveEntered=true、
     //                      hideTransitionCover() 淡入画面（这就是“进入”那一下）
     // fsWatch(1000ms)    —— 进入后持续跟随：换源/广告→正片时复用同一容器换 video，
     //                      并把播放器重写的样式重新落实
@@ -198,22 +198,24 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     webView.removeCallbacks(videoWatch)
                     // 等视频真正出第一帧再褪黑幕（不拍脑袋定时间）
                     webView.removeCallbacks(frameWatch)
-                    webView.postDelayed(frameWatch, 250)
+                    webView.postDelayed(frameWatch, 80)
                 }
             }
             webView.postDelayed(this, 800)
         }
     }
 
-    // 等首帧真正呈现（requestVideoFrameCallback），然后才淡入直播画面
+    // 等这一源连续交出画面帧，然后才淡入直播画面
     private val frameWatch: Runnable = object : Runnable {
         override fun run() {
             if (transitionCover == null) return
             webView.evaluateJavascript(FRAME_READY_JS) { result ->
+                // 起播那几秒主线程被页面加载压着，排队的几次探测回调会挤在一起回来：
+                // 幕已经褪了就不再重复揭示
+                if (transitionCover == null) return@evaluateJavascript
                 when (result?.trim()?.trim('"')) {
                     "1" -> {
                         settlingSince = 0L
-                        Log.d(TAG, "first video frame ready")
                         liveEntered = true
                         hideTransitionCover()
                     }
@@ -230,7 +232,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     }
                 }
             }
-            webView.postDelayed(this, 250)
+            webView.postDelayed(this, 120)
         }
     }
 
@@ -1877,23 +1879,22 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 全屏容器里的视频是否真的出画面了（首帧呈现 / 兜底播发状态）
+        // 全屏容器里的视频是否真的出画面了（这一源连续交出 5 帧）
         // '1' = 可以揭幕；'2' = 画面到位但容器还在改尺寸，再等等，别把跳变露给用户；'0' = 还没出帧
         val FRAME_READY_JS = """
             (function () {
               var s = window.__tvFs;
               var v = s && s.el ? s.el : null;
               if (!v) return '0';
-              var ready = false;
-              if (v.requestVideoFrameCallback) {
-                if (!v.__tvFrameGot) {
-                  try {
-                    v.requestVideoFrameCallback(function () { v.__tvFrameGot = 1; });
-                  } catch (e) {}
-                }
-                ready = !!v.__tvFrameGot;
-              }
-              if (!ready) ready = v.videoWidth > 0 && v.readyState >= 2 && !v.paused;
+              var hasQ = !!v.getVideoPlaybackQuality;
+              var frames = hasQ ? v.getVideoPlaybackQuality().totalVideoFrames : 0;
+              if (v.__tvBaseF === undefined) v.__tvBaseF = frames;
+              // 帧数往回走 = 播放器换了源（起播时常先挂一个只蹦一两帧就不动的地址）：
+              // 基准重来，黑幕继续压到新源真交画面 —— 不用去听 src 变化
+              if (frames < v.__tvBaseF) v.__tvBaseF = frames;
+              // 老 WebView 没有计帧接口时退回原来的“有当前数据就算”
+              var ready = v.readyState >= 2 && !v.paused &&
+                  (!hasQ || frames - v.__tvBaseF >= 5);
               if (!ready) return '0';
               var t = window.__tvFitAt;
               if (t && Date.now() - t < 400) return '2';
