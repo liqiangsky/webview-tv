@@ -36,4 +36,6 @@ dependencies {
     // 只取 core：纯 Java 的二维码编码，无 Android 依赖、无传递依赖。
     // 二维码在本地算成 Bitmap，不请求任何第三方出图接口，配置地址不出内网。
     implementation 'com.google.zxing:core:3.5.3'
+    // 频道列表要回收视图：一组上百个频道，全建真实 View 会在呼出面板时掉帧
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
 }

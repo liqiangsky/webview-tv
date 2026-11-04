@@ -18,10 +18,14 @@ object Qr {
                     com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M
             )
         )
-        val bmp = Bitmap.createBitmap(m.width, m.height, Bitmap.Config.ARGB_8888)
-        for (x in 0 until m.width) for (y in 0 until m.height) {
-            bmp.setPixel(x, y, if (m.get(x, y)) Color.BLACK else Color.WHITE)
+        // 逐像素 setPixel 要十几万次调用，先在数组里拼好再一次刷进 Bitmap
+        val w = m.width
+        val h = m.height
+        val pixels = IntArray(w * h)
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) pixels[row + x] = if (m.get(x, y)) Color.BLACK else Color.WHITE
         }
-        bmp
+        Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
     }.getOrNull()
 }

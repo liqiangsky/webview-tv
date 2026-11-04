@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 频道行改成代码搭建，这几个 id 不再挂在布局文件上 -->
+<resources>
+    <item name="rowName" type="id" />
+    <item name="playBadge" type="id" />
+    <item name="playBadgeIcon" type="id" />
+    <item name="badgeLabel" type="id" />
+</resources>

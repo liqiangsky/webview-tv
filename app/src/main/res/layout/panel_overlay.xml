@@ -108,19 +108,13 @@
                     android:layout_height="0dp"
                     android:layout_weight="1">
 
-                    <ScrollView
-                        android:id="@+id/panelListScroll"
+                    <androidx.recyclerview.widget.RecyclerView
+                        android:id="@+id/panelList"
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
                         android:clipToPadding="false"
-                        android:scrollbars="none">
-
-                        <LinearLayout
-                            android:id="@+id/panelList"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="vertical" />
-                    </ScrollView>
+                        android:overScrollMode="never"
+                        android:scrollbars="none" />
 
                     <!-- 出厂没有频道：列表空着，这里给一句去处的话 -->
                     <TextView

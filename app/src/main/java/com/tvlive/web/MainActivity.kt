@@ -27,14 +27,16 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.os.SystemClock
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import org.json.JSONTokener
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -60,8 +62,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // 遮罩：左 频道信息 / 中 频道列表 / 右 手机配置二维码
     private lateinit var panelRoot: View
     private lateinit var panelBody: View
-    private lateinit var panelList: LinearLayout
-    private lateinit var panelListScroll: ScrollView
+    private lateinit var panelList: RecyclerView
     private lateinit var panelEmpty: View
     private lateinit var groupName: TextView
     private lateinit var groupCount: TextView
@@ -93,6 +94,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private var playTimeoutArmed = false     // 起播超时是否已排期（一次点台只计一次时）
     private var panelOpen = false
     private var openKeyUp = false        // 呼出面板那一下按键的 UP 需要吃掉
+
+    // 频道列表的重建条件：分组、数据版本、在播行号，三者都没变就不必重搭
+    private var listVersion = 0
+    private var listBuiltFor: Triple<Int, Int, Int>? = null
 
     // 从登录页返回后需要重载当前频道（让新登录 cookie 生效）
     private var needReloadAfterLogin = false
@@ -260,8 +265,12 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
         panelRoot = findViewById(R.id.panelRoot)
         panelBody = findViewById(R.id.panelBody)
-        panelList = findViewById(R.id.panelList)
-        panelListScroll = findViewById(R.id.panelListScroll)
+        panelList = findViewById<RecyclerView>(R.id.panelList).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            adapter = channelAdapter
+            // 换组/换台时不要做条目动画：动画期间焦点会挂在被回收的行上
+            itemAnimator = null
+        }
         panelEmpty = findViewById(R.id.panelEmpty)
         groupName = findViewById(R.id.groupName)
         groupCount = findViewById(R.id.groupCount)
@@ -340,6 +349,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
      * 数据只由配置网页写入，这里负责人家在落盘后把界面跟上。
      */
     private fun reloadChannels() {
+        listVersion++
         val map = LinkedHashMap<String, MutableList<Channel>>()
         for (ch in ChannelStore.channels()) map.getOrPut(ch.group) { mutableListOf() }.add(ch)
         groups = map.map { Group(it.key, it.value) }
@@ -489,42 +499,138 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         persistFocus()
     }
 
-    /** 渲染当前分组的频道列表（正在播放的行带声波角标） */
-    private fun renderChannelList() {
-        panelList.removeAllViews()
-        val g = groups.getOrNull(curGroupIdx)
-        panelEmpty.visibility = if (g == null || g.channels.isEmpty()) View.VISIBLE else View.GONE
-        if (g == null) return
-        val gi = curGroupIdx
-        for ((ci, ch) in g.channels.withIndex()) {
-            val row = layoutInflater.inflate(R.layout.item_panel_channel, panelList, false)
-            row.findViewById<TextView>(R.id.rowName).text = ch.name
-            val isPlaying = playingNow(ch)
-            if (isPlaying) {
-                row.findViewById<View>(R.id.playBadge).visibility = View.VISIBLE
-                styleRow(row, true)          // 里面会把声波动画拉起来
-            }
-            row.tag = ci
-            row.setOnFocusChangeListener { v2, hasFocus ->
-                styleRow(v2, hasFocus || isPlaying)
+    /**
+     * 频道列表走视图回收：一组上百个频道，全建真实 View 的话光 measure/layout
+     * 就能把呼出面板那一下顶掉好几帧，屏上其实只需要十几行。
+     */
+    private inner class ChannelAdapter : RecyclerView.Adapter<ChannelAdapter.Holder>() {
+
+        inner class Holder(val row: View) : RecyclerView.ViewHolder(row)
+
+        override fun getItemCount(): Int = groups.getOrNull(curGroupIdx)?.channels?.size ?: 0
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
+            val row = newRow()
+            val holder = Holder(row)
+            row.setOnFocusChangeListener { v, hasFocus ->
+                val position = holder.bindingAdapterPosition
+                val ch = channelAt(position) ?: return@setOnFocusChangeListener
+                styleRow(v, hasFocus || playingNow(ch))
                 if (hasFocus) {
-                    listIndexByGroup[gi] = ci
+                    listIndexByGroup[curGroupIdx] = position
                     if (infoFollowFocus) renderInfo(ch)
-                    panelListScroll.post { smoothScrollToView(panelListScroll, v2) }
+                    // 光标行摆到可视区上三分之一：焦点落定后 RecyclerView 只做“露出来”的最小滚动，
+                    // 位置得自己挪（这一帧末尾再挪，避免和它的滚动叠成两下）
+                    panelList.post { focusToThird(position) }
                     persistFocus()
                 }
             }
-            row.setOnClickListener { playChannel(ch) }
+            row.setOnClickListener {
+                channelAt(holder.bindingAdapterPosition)?.let { playChannel(it) }
+            }
             row.setOnKeyListener { _, keyCode, event ->
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> { stepGroup(-1); true }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> { stepGroup(1); true }
+                    KeyEvent.KEYCODE_DPAD_UP -> { moveFocus(-1); true }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> { moveFocus(1); true }
                     else -> false
                 }
             }
-            panelList.addView(row)
+            return holder
         }
+
+        override fun onBindViewHolder(holder: Holder, position: Int) {
+            val ch = channelAt(position) ?: return
+            val row = holder.row
+            row.findViewById<TextView>(R.id.rowName).text = ch.name
+            val playing = playingNow(ch)
+            row.findViewById<View>(R.id.playBadge).visibility =
+                if (playing) View.VISIBLE else View.GONE
+            // 回收来的行带着上一条目的白药丸，绑定时按当前状态重刷一遍
+            styleRow(row, row.isFocused || playing)
+        }
+
+        private fun channelAt(position: Int): Channel? =
+            groups.getOrNull(curGroupIdx)?.channels?.getOrNull(position)
+    }
+
+    private val channelAdapter = ChannelAdapter()
+
+    /** 渲染当前分组的频道列表（正在播放的行带声波角标） */
+    private fun renderChannelList() {
+        val g = groups.getOrNull(curGroupIdx)
+        panelEmpty.visibility = if (g == null || g.channels.isEmpty()) View.VISIBLE else View.GONE
+        // 只有换组、换台或配置页改了数据才重绑，其余时候原样留着
+        val key = Triple(curGroupIdx, listVersion, playingLine)
+        if (listBuiltFor == key) return
+        listBuiltFor = key
+        channelAdapter.notifyDataSetChanged()
+    }
+
+    /** 行视图代码直搭，不走 XML inflate：每行 inflate 要一两毫秒，一屏十几行也是白花的 */
+    private fun newRow(): View {
+        val row = LinearLayout(this).apply {
+            layoutParams = RecyclerView.LayoutParams(
+                RecyclerView.LayoutParams.MATCH_PARENT, RecyclerView.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(3) }
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.panel_row)
+            isClickable = true
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setPadding(dp(18), dp(7), dp(18), dp(7))
+        }
+        row.addView(
+            TextView(this).apply {
+                id = R.id.rowName
+                setTextColor(0xFFFFFFFF.toInt())
+                textSize = 18f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                maxWidth = dp(400)
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        // 名字靠左，中间留白由这块吸收，角标顶到行尾（整行仍是可点的焦点区）
+        row.addView(
+            View(this),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        row.addView(newBadge())
+        return row
+    }
+
+    private fun newBadge(): View {
+        val badge = LinearLayout(this).apply {
+            id = R.id.playBadge
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        badge.addView(
+            BadgeIconView(this).apply {
+                id = R.id.playBadgeIcon
+                setImageResource(R.drawable.badge_playing)
+            },
+            LinearLayout.LayoutParams(dp(17), dp(16))
+        )
+        badge.addView(
+            TextView(this).apply {
+                id = R.id.badgeLabel
+                text = "播放中"
+                setTextColor(0xFFFFFFFF.toInt())
+                textSize = 13f
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = dp(7) }
+        )
+        return badge
     }
 
     // ---------- 左列频道信息（在播·预览状态 / EPG / 系统时间） ----------
@@ -646,18 +752,47 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         )
     }
 
-    /** 把光标放到列表第 index 行，并滚到看得见的位 */
+    /**
+     * 上下换行自己走：回收列表里的行随时可能被拆掉，系统默认焦点搜索一挑就挑空，
+     * 遥控器上下键等于哑巴。这里按位置取，屏上就直接抢焦点（RecyclerView 会顺手滚进视野），
+     * 已经滚出屏的就先铺过去再抢。
+     */
+    private fun moveFocus(delta: Int) {
+        val g = groups.getOrNull(curGroupIdx) ?: return
+        if (g.channels.isEmpty()) return
+        val target = ((listIndexByGroup[curGroupIdx] ?: 0) + delta)
+            .coerceIn(0, g.channels.size - 1)
+        val row = panelList.findViewHolderForAdapterPosition(target)?.itemView
+        if (row != null) row.requestFocus() else focusListIndex(target)
+    }
+
+    /** 光标行摆到可视区上三分之一处（居中偏上，改造前就是这个位） */
+    private fun focusToThird(pos: Int) {
+        val row = panelList.findViewHolderForAdapterPosition(pos)?.itemView ?: return
+        val delta = row.top - panelList.height / 3
+        if (delta != 0) panelList.smoothScrollBy(0, delta)
+    }
+
+    /** 把光标放到列表第 index 行：回收列表里这行不一定已经建出来，先滚过去再抢焦点 */
     private fun focusListIndex(index: Int) {
         val g = groups.getOrNull(curGroupIdx) ?: return
         if (g.channels.isEmpty()) return
-        val row = panelList.getChildAt(index.coerceIn(0, g.channels.size - 1)) ?: return
-        row.requestFocus()
-        panelListScroll.post { smoothScrollToView(panelListScroll, row) }
+        val pos = index.coerceIn(0, g.channels.size - 1)
+        // 落点直接按“上三分之一”给，省掉抢完焦点再补一次滚动
+        (panelList.layoutManager as LinearLayoutManager)
+            .scrollToPositionWithOffset(pos, panelList.height / 3)
+        focusRow(pos, 4)
     }
 
-    private fun smoothScrollToView(scroll: ScrollView, v: View) {
-        val target = v.top - scroll.height / 3
-        scroll.smoothScrollTo(0, target.coerceAtLeast(0))
+    /** 滚动要到下一帧才落位，那时条目才建得出来，所以补几次尝试 */
+    private fun focusRow(pos: Int, tries: Int) {
+        panelList.post {
+            val row = panelList.findViewHolderForAdapterPosition(pos)?.itemView
+            when {
+                row != null -> row.requestFocus()
+                tries > 0 -> focusRow(pos, tries - 1)
+            }
+        }
     }
 
     /** 选中频道：切台后面板保持打开（可连续换台）；点的正是在播频道则只收起面板 */
@@ -1076,8 +1211,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             finish()
             return true
         }
-        // 直播网页里屏蔽一切页面操作（方向键/OK/Tab），只看视频
-        if (pageInputBlocked && keyCode in BLOCKED_PAGE_KEYS) {
+        // 直播网页里屏蔽一切页面操作（方向键/OK/Tab），只看视频。
+        // 面板是自己家的界面，不在屏蔽之列，否则光标在频道列表里挪不动
+        if (pageInputBlocked && !panelOpen && keyCode in BLOCKED_PAGE_KEYS) {
             return true
         }
         return super.onKeyDown(keyCode, event)
@@ -1086,6 +1222,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     /** 从登录页返回：登录 cookie 已写进共享 CookieManager，重载当前频道让它生效 */
     override fun onResume() {
         super.onResume()
+        // 退后台再回来，系统栏常常又被系统放出来了：画面会被顶进安全区，看着就是“歪了一截”。
+        // 全屏容器也要照新的可视区立刻重铺，等下一轮轮询的那一秒里画面还是旧的尺寸。
+        hideSystemUi()
+        if (cssFullscreen) webView.post { webView.evaluateJavascript(APPLY_FS_JS, null) }
         // 前台才接配置服务的界面动作；退到后台让给登录页或干脆无人应答
         TvApp.instance.host = this
         // 换过网络后 IP 会变，回到前台就把配对页上的地址和二维码刷成当前值
