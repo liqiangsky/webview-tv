@@ -57,10 +57,12 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 
 - **入口**：面板右列的二维码（本地 zxing 生成，配置地址不出内网）+ 明文 `<电视IP>:8723` + 4 位配对码
 - **门禁**：写接口必须带 `X-Pin` 请求头（或 `?pin=`）且与屏幕上显示的配对码一致；配对码可在电视上「换一组」
-- **读**：`GET /` 配置页，`GET /api/state` 回当前分组、频道、登录网址与在播状态
+- **读**：`GET /` 配置页，`GET /api/state` 回当前分组、频道、登录网址、在播状态和 `remoteReady`（登录页在不在前台）
 - **写**（`POST /api`，`{"op":..}`）：`ch.add` / `ch.upd` / `ch.del` / `ch.import` / `ch.clear` /
   `group.add` / `group.rename` / `group.del` / `login.add` / `login.del` / `pin.regenerate`，
   另有 `play`、`login.open` 让手机直接遥控电视
+- **遥控通道**：`GET /remote?pin=`（同 8723 端口）升级成 WebSocket，逐条 JSON 指令与下表一致；
+  握手前先验配对码，登录后页开着才收，登录页不在前台时推 `{"t":"ready","v":false}` 让页面提示
 - 数据变更后 `ChannelStore.onChanged` 回主线程重画面板，手机改完电视立刻可见
 
 ## 节目单（EPG）
@@ -69,24 +71,34 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 - 每天 00:25 `AlarmManager` 定时拉取，`EpgReceiver` 在开机后重新排闹钟；解析结果落盘
 - 保留窗口：已播 36 小时 ~ 未播 26 小时；按频道名匹配，匹配不上再拿第三列的节目别名试一次
 
-## 手机遥控登录（配套 `phone` 模块）
+## 手机遥控登录（配置网页 + 配套 `phone` 模块）
 
-有些直播网页要登录才能看，但电视上没法打字。手机在配置页的登录网址上点「在电视上打开」
-（即向电视发 `login.open`），电视打开一个可交互的登录 WebView（`LoginActivity`），手机装 `phone` 模块当鼠标，
-把操作同步到电视上完成登录；登录态存电视的 Cookie，回到播放页自动刷新。
+有些直播网页要登录才能看，但电视上没法打字。手机在配置页的登录网址上点「打开」
+（即向电视发 `login.open`），电视打开一个可交互的登录 WebView（`LoginActivity`），手机当鼠标，
+把操作同步到电视上完成登录。打开登录页前电视先 `stopPlayback()` 停掉当前直播（掐请求 + 暂停页面里的
+`video/audio`），退出登录页后重播刚才那个台，登录写进共享 Cookie 的登录态这才生效；
+重播不在 `onResume` 里立刻做 —— 那一刻登录页的窗口常常还没撤干净，页面在这半秒里加载，
+站点自己的播放器容易停在「有画面但没播」的状态，所以挂到窗口真正拿到焦点（`onWindowFocusChanged`）才起播。
+
+遥控有两个入口，指令与手势完全相同：**配置网页的「电视遥控」页**（从「网站登录」顶栏「＋」左边的图标进，
+走 8723 的 WebSocket，不用装 App），以及 `phone` 模块的触控板 App（走 8721 裸 TCP）。
 
 - **手机 = 鼠标模型**：手机只发**相对位移 + 行为**（不带屏幕坐标），电视自己维护一个光标点（`CursorView`）。
   这样不受手机屏幕比例和网页布局影响
 - **触摸注入**：电视把动作换算成光标位置的 Android `MotionEvent`，用 `webView.dispatchTouchEvent()` 打进网页——
   走系统输入管线，网页收到的是 `isTrusted=true` 的真实触摸，点击 / 双指滚动 / 长按拖拽都按真实手势处理，
   不受 CSP 影响、不怕网站校验事件可信度
-- **文字注入**：手机底部一个输入框 + 一个「替换」按钮，点替换把内容整体写进电视上聚焦的输入框。
+- **文字注入**：手机底部一个输入框 + 一个「替换」按钮，点替换把内容整体写进电视上聚焦的输入框
+  （输入框留空点替换就是清空那个框）。
   优先走合成 IME（捕获页面 `InputConnection` 后 `commitText`），等同真实输入法；桥没建立时退回 JS
   （native value setter + `input` 事件，兼容 React/Vue 受控输入框）
-- **传输**：电视端起一个 TCP 服务（`RemoteServer`，端口 8721），newline 分隔 JSON；手机填「电视 IP」连接。
-  登录页左上角常显 `遥控 <IP>:8721 · 已连接手机 N`
-- **触控板手势**（`TrackpadView`）：单指滑动=移动、轻点=单击、二连点=双击、长按后滑动=拖拽、双指滑动=滚轮；
-  另有 回车 / Tab / 删除 / 返回 / 刷新 快捷键
+- **传输**：App 用 `RemoteServer`（端口 8721，newline 分隔 JSON，触控板 40ms 合并一次位移）；
+  网页用 `ConfigServer` 的 `/remote` WebSocket，按 rAF（≈16ms）合并发送，并用
+  `pointerrawupdate` / `getCoalescedEvents` 把两帧之间的中间点补齐。
+  网页这条路有个绕不开的限制：标签页切后台或锁屏，浏览器就冻结 JS、连接断掉（回前台自动重连），
+  而普通 http 页面拿不到系统的屏幕常亮，所以登录时得自己保持亮屏
+- **触控板手势**（App 的 `TrackpadView` / 网页的 `#pad`）：单指滑动=移动、轻点=单击、二连点=双击、
+  长按后滑动=拖拽、双指滑动=滚轮；快捷键网页上是 Tab / 返回 / 刷新，App 另有 点击 / 双击 / 回车 / 删除
 
 协议（一行一个 JSON）：
 

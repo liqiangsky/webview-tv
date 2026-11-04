@@ -206,6 +206,33 @@
   #toast.bad { background: rgba(255,69,58,.96); }
   .pinrow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
   .pinrow b { color: var(--fg); font-size: 15px; letter-spacing: .14em; font-weight: 600; }
+  /* 电视遥控：触控板是一块圆角卡片。touch-action:none 只加在这一块上，
+     否则浏览器先抢手势（滚动、双指缩放），累积到的位移就是断断续续的，光标跟不住手指 */
+  .pad { position: relative; height: 46vh; min-height: 230px; margin-top: 16px;
+    background: var(--card); border-radius: 14px; overflow: hidden;
+    box-shadow: inset 0 0 0 1px var(--sep);
+    touch-action: none; -webkit-user-select: none; user-select: none; }
+  .pad.live { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .pad.drag .dot { background: var(--accent); border-color: var(--accent); }
+  .pad .dot { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px;
+    margin: -13px 0 0 -13px; border-radius: 50%; border: 2px solid var(--accent);
+    background: rgba(0, 122, 255, .14); opacity: 0; transition: opacity .16s;
+    pointer-events: none; }
+  .pad.moved .dot { opacity: .95; }
+  .pad .tip { position: absolute; left: 0; right: 0; bottom: 12px; text-align: center;
+    font-size: 12px; color: var(--dim); pointer-events: none; }
+  .pad .off { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; font-size: 15px; color: var(--dim2);
+    background: var(--chrome); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  .chip.key { min-width: 66px; text-align: center; padding: 9px 13px; font-size: 15px;
+    background: var(--card); color: var(--fg); box-shadow: inset 0 0 0 1px var(--sep); }
+  .chip.key:active { transform: scale(.96); opacity: .5; }
+  .st { align-items: center; }
+  .st i { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none;
+    transition: background .2s; }
+  .st i.ok { background: #34c759; }
+  .st i.wait { background: #ff9f0a; }
+  .st i.bad { background: var(--danger); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -264,18 +291,56 @@
   <div class="navbar">
     <span class="side"><button class="back" data-back>返回</button></span>
     <h2>网站登录</h2>
-    <span class="side r"></span>
+    <span class="side r">
+      <button class="ib" id="rcFromLogin" aria-label="电视遥控"><svg viewBox="0 0 24 24">
+        <rect x="3.5" y="5.5" width="17" height="13" rx="4.5"/>
+        <circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/>
+      </svg></button>
+      <button class="ib" id="addLogin" aria-label="添加登录网址"><svg viewBox="0 0 24 24">
+        <path d="M12 5.5v13M5.5 12h13"/></svg></button>
+    </span>
   </div>
   <div class="pmain">
     <div class="group" id="loginList"></div>
     <div class="hint">点条目右侧「打开」，电视会全屏打开这个网址并等手机遥控——点按钮、输账号密码
-      用「电视遥控」App 的触控板。登录完按返回退出，电视重新加载当前页面。</div>
-    <div class="sec"><b>新增登录网址</b></div>
+      用「电视遥控」页的触控板。登录完按返回退出，电视重新加载当前页面。</div>
+  </div>
+</div>
+
+<div class="page" id="p-remote" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>电视遥控</h2>
+    <span class="side r"><button class="lnk sm" id="rcRe">重连</button></span>
+  </div>
+  <div class="pmain">
     <div class="group">
-      <div class="frow"><label>名称</label><input id="lnName" placeholder="网站账号"></div>
-      <div class="frow"><label>地址</label><input id="lnUrl" placeholder="example.com/login" inputmode="url"></div>
+      <div class="row noact st"><i id="rcDot"></i>
+        <div class="txt"><div class="nm" id="rcState">未连接</div></div></div>
     </div>
-    <button class="act-full pri" id="lnAdd">添加</button>
+    <div class="sec"><b>网页操作</b></div>
+    <div class="pad" id="pad"><span class="dot" id="padDot"></span>
+      <span class="tip" id="padTip">单指移动 · 轻点单击 · 二连点双击 · 长按拖动 · 双指滚动</span>
+      <span class="off" id="padOff" hidden>电视当前不在登录页</span></div>
+    <div class="chips">
+      <button class="chip key" data-rk="back">返回上一页</button>
+      <button class="chip key" data-rk="refresh">刷新页面</button>
+    </div>
+    <div class="sec"><b>输入框</b></div>
+    <div class="group">
+      <div class="frow"><label>文字</label>
+        <input id="rcText" placeholder="留空就是清空电视上的输入框"></div>
+    </div>
+    <button class="act-full pri" id="rcSend">替换输入框</button>
+    <div class="chips">
+      <button class="chip key" data-rk="tab">下一个框</button>
+    </div>
+    <div class="hint">上面那块管电视上的网页：光标、点击、翻页、返回；下面这排只管当前聚焦的输入框：
+      打字、切框，提交用触控板光点去点网页上的登录按钮。
+      手机当鼠标，这块板只发相对位移，电视上的光标自己走路。
+      打开登录页时电视上的直播会先停下，登录完按返回键退出，电视自动重播刚才那个台，新登录态就生效了。
+      要用的时候电视得开着登录页，并且这个页面得停在屏幕最前 —— 普通 http 页面拿不到系统的
+      屏幕常亮，一锁屏连接就断，回前台会自动重连。</div>
   </div>
 </div>
 
@@ -342,6 +407,22 @@
     <div class="chips" id="gChips"></div>
     <div class="chips" id="qChips"></div>
     <button class="act-full danger" id="eDel" hidden>删除该频道</button>
+  </div>
+</div>
+
+<div class="mask" id="loginMask" hidden>
+  <div class="sheet">
+    <div class="nav">
+      <button class="lnk" id="lCancel">取消</button>
+      <h2>添加登录网址</h2>
+      <button class="lnk b" id="lSave">保存</button>
+    </div>
+    <div class="group">
+      <div class="frow"><label>名称</label><input id="lnName" placeholder="网站账号" autocomplete="off"></div>
+      <div class="frow col"><label>地址</label>
+        <input id="lnUrl" inputmode="url" placeholder="https://example.com/login"></div>
+    </div>
+    <div class="hint">漏了协议会按 https 补上；看着不像能打开的网址会被拦下。</div>
   </div>
 </div>
 
@@ -448,6 +529,9 @@
     $('pinShow').textContent = pin() || '----';
     $('cntCh').textContent = state.groups.reduce(function (n, g) { return n + g.channels.length; }, 0);
     $('cntLogin').textContent = state.logins.length ? String(state.logins.length) : '';
+    // WebSocket 没连上时（没打开遥控页），状态跟着 api 回显走，首页那行才不是瞎报的
+    if (!wsLive && typeof state.remoteReady === 'boolean') tvReady = state.remoteReady;
+    renderRemote();
     renderChannels();
     renderGroups();
     renderLogins();
@@ -519,7 +603,7 @@
   function renderLogins() {
     var host = $('loginList');
     if (!state.logins.length) {
-      host.innerHTML = '<div class="empty" style="padding:26px">还没有登录网址<br>在下面填好，添加后点「打开」</div>';
+      host.innerHTML = '<div class="empty" style="padding:26px">还没有登录网址<br>点右上角「＋」添加，添加后点「打开」</div>';
       return;
     }
     host.innerHTML = state.logins.map(function (l) {
@@ -600,23 +684,34 @@
 
   document.body.addEventListener('click', function (ev) {
     var t = ev.target.closest('[data-page],[data-play],[data-edit],[data-lopen],[data-ldel],' +
-      '[data-gedit],[data-fold],[data-g],[data-q],[data-back]');
+      '[data-gedit],[data-fold],[data-g],[data-q],[data-rk],[data-back]');
     if (!t) return;
     var d = t.dataset;
     function act(op, body, msg) {
       api(op, body).then(handle).then(function () { toast(msg); }).catch(function () {});
     }
     if (d.back != null) {
-      hide(t.closest('.page'));
+      var pg = t.closest('.page');
+      if (pg && pg.id === 'p-remote') closeWs();
+      hide(pg);
     } else if (d.page != null) {
       show($('p-' + d.page));
+    } else if (d.rk != null) {
+      remoteKey(d.rk);
     } else if (d.play != null) {
       var p = findChannel(d.play);
       if (p) act('play', { group: p.g, name: p.ch.name, url: p.ch.url, line: p.ch.line }, '电视已切台');
     } else if (d.edit != null) {
       openEdit(findChannel(d.edit));
     } else if (d.lopen != null) {
-      act('login.open', { url: d.lopen }, '电视正在打开登录页');
+      // 电视进了登录页，手机紧接着就该拿起遥控：直接推到那一页并连上
+      // 「网站登录」留在下面，遥控页返回时退回它
+      api('login.open', { url: d.lopen }).then(handle).then(function () {
+        toast('电视正在打开登录页');
+        resetDot();
+        show($('p-remote'));
+        openWs();
+      }).catch(function () {});
     } else if (d.ldel != null) {
       arm(t, '确认', function () { act('login.del', { url: d.ldel }, '已删除'); });
     } else if (d.gedit != null) {
@@ -757,6 +852,10 @@
     if (!/^\d{4}$/.test(v)) { toast('要 4 位数字', true); return; }
     setPin(v);
     hide($('pinMask'));
+    // 旧的连接带着旧码：遥控页开着就重开一条
+    var reopen = padOpen;
+    closeWs();
+    if (reopen) openWs();
     refresh(true);
   };
   $('pinCancel').onclick = function () { hide($('pinMask')); };
@@ -783,12 +882,28 @@
     return u;
   }
 
-  $('lnAdd').onclick = function () {
+  function openLoginAdd() {
+    $('lnName').value = '';
+    $('lnUrl').value = '';
+    show($('loginMask'));
+    $('lnName').focus();
+  }
+
+  $('addLogin').onclick = openLoginAdd;
+  // 触控板入口放在「＋」左边：开完登录网址下一步就是它，少绕一层
+  // 不把「网站登录」收掉：遥控页返回时退回它，而不是直接掉回首页
+  $('rcFromLogin').onclick = function () {
+    resetDot();
+    show($('p-remote'));
+    openWs();
+  };
+  $('lCancel').onclick = function () { hide($('loginMask')); };
+  $('lSave').onclick = function () {
     var name = $('lnName').value.trim(), url = normUrl($('lnUrl').value);
     if (!url) { toast('网址格式不正确，例：https://example.com/login', true); return; }
     api('login.add', { name: name, url: url }).then(function (r) {
       handle(r);
-      $('lnName').value = ''; $('lnUrl').value = '';
+      hide($('loginMask'));
       toast('已添加');
     }).catch(function () {});
   };
@@ -815,6 +930,205 @@
       api('ch.clear', {}).then(function (r) { handle(r); toast('已清空'); }).catch(function () {});
     });
   };
+
+  // ---------------- 电视遥控 ----------------
+  // 一条常驻 WebSocket 送光标指令：触控板每帧都发消息，走「一次请求一个连接」的 HTTP
+  // 既来不及也跟不住。页面用 rAF 攒一拍（≈16ms）就发，本地光标点先动起来，不等电视回话。
+
+  var ws = null, wsLive = false, tvReady = false, padOpen = false;
+  var pad = $('pad'), padDot = $('padDot');
+  var SLOP = 12, HOLD = 400, TAP = 300, DBL = 300, SCROLL_STEP = 0.35;
+  var pts = {}, nPts = 0, lastX = 0, lastY = 0, downX = 0, downY = 0, downT = 0;
+  var moved = false, dragging = false, multi = false, mid = null;
+  var pendX = 0, pendY = 0, raf = 0, lastUp = 0, holdTimer = 0;
+  var dotX = 0, dotY = 0, dotOn = false;
+
+  function wsSend(o) {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(o));
+  }
+
+  function openWs() {
+    padOpen = true;
+    if (ws || !pin()) { renderRemote(); return; }
+    var s;
+    try {
+      s = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') +
+        location.host + '/remote?pin=' + encodeURIComponent(pin()));
+    } catch (e) { renderRemote(); return; }
+    ws = s;
+    s.onopen = function () { if (ws === s) { wsLive = true; renderRemote(); } };
+    s.onmessage = function (ev) {
+      if (ws !== s) return;
+      var j = null;
+      try { j = JSON.parse(ev.data); } catch (e) {}
+      if (j && j.t === 'ready') { tvReady = !!j.v; renderRemote(); }
+    };
+    s.onclose = function () {
+      if (ws !== s) return;
+      ws = null; wsLive = false;
+      renderRemote();
+      if (padOpen) setTimeout(openWs, 1500);
+    };
+    renderRemote();
+  }
+
+  function closeWs() {
+    padOpen = false;
+    var s = ws;
+    ws = null; wsLive = false;
+    if (s) { s.onclose = null; try { s.close(); } catch (e) {} }
+    renderRemote();
+  }
+
+  function renderRemote() {
+    var d = $('rcDot');
+    d.className = wsLive ? (tvReady ? 'ok' : 'wait') : 'bad';
+    pad.classList.toggle('live', wsLive && tvReady);
+    var off = !wsLive || !tvReady;
+    $('padOff').hidden = !off;
+    $('padOff').textContent = wsLive ? '电视当前不在登录页' : '未连接电视';
+    $('padTip').hidden = off;
+    $('rcState').textContent = !wsLive ? (pin() ? '没连上电视' : '还没配对')
+      : (!tvReady ? '已连接，等电视进登录页' : '已就绪');
+  }
+
+  function flushMove() {
+    raf = 0;
+    if (!pendX && !pendY) return;
+    wsSend({ t: 'm', dx: pendX, dy: pendY });
+    pendX = 0; pendY = 0;
+  }
+
+  function accumulate(dx, dy) {
+    pendX += dx; pendY += dy;
+    if (!raf) raf = requestAnimationFrame(flushMove);
+    var r = pad.getBoundingClientRect();
+    dotX = Math.max(6, Math.min(r.width - 6, dotX + dx));
+    dotY = Math.max(6, Math.min(r.height - 6, dotY + dy));
+    padDot.style.left = dotX + 'px';
+    padDot.style.top = dotY + 'px';
+    if (!dotOn) { dotOn = true; pad.classList.add('moved'); }
+  }
+
+  function midpoint() {
+    var k = Object.keys(pts);
+    if (k.length < 2) return null;
+    var a = pts[k[0]], b = pts[k[1]];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+
+  function padDown(ev) {
+    ev.preventDefault();
+    try { pad.setPointerCapture(ev.pointerId); } catch (e) {}
+    pts[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+    nPts++;
+    if (nPts === 1) {
+      lastX = downX = ev.clientX;
+      lastY = downY = ev.clientY;
+      downT = Date.now();
+      moved = false; multi = false;
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(function () {
+        if (moved || multi || nPts !== 1) return;
+        dragging = true;
+        pad.classList.add('drag');
+        wsSend({ t: 'ds' });
+      }, HOLD);
+    } else if (nPts === 2) {
+      multi = true;
+      clearTimeout(holdTimer);
+      if (dragging) { dragging = false; pad.classList.remove('drag'); wsSend({ t: 'de' }); }
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      pendX = 0; pendY = 0;
+      mid = midpoint();
+    }
+  }
+
+  function padStep(ev) {
+    var p = pts[ev.pointerId];
+    if (!p) return;
+    var dx = ev.clientX - p.x, dy = ev.clientY - p.y;
+    p.x = ev.clientX; p.y = ev.clientY;
+    if (nPts >= 2 && mid) {
+      var m = midpoint();
+      if (!m) return;
+      var vdx = m.x - mid.x, vdy = mid.y - m.y;  // 手指上滑 = 页面向下滚
+      mid = m;
+      if (Math.abs(vdx) > 0.5 || Math.abs(vdy) > 0.5)
+        wsSend({ t: 's', dx: vdx * SCROLL_STEP, dy: vdy * SCROLL_STEP });
+      return;
+    }
+    if (nPts !== 1) return;
+    var mdx = ev.clientX - lastX, mdy = ev.clientY - lastY;
+    lastX = ev.clientX; lastY = ev.clientY;
+    if (!moved) {
+      if (Math.sqrt((ev.clientX - downX) * (ev.clientX - downX) +
+        (ev.clientY - downY) * (ev.clientY - downY)) <= SLOP) return;
+      moved = true;
+      clearTimeout(holdTimer);
+    }
+    accumulate(mdx, mdy);
+  }
+
+  function padMove(ev) {
+    if (!pts[ev.pointerId]) return;
+    ev.preventDefault();
+    // raw / coalesced 事件把两次 rAF 之间的中间点全补上，轨迹不丢帧
+    var seq = ev.getCoalescedEvents ? ev.getCoalescedEvents() : null;
+    if (seq && seq.length) { for (var i = 0; i < seq.length; i++) padStep(seq[i]); return; }
+    padStep(ev);
+  }
+
+  function padEnd(ev) {
+    if (!pts[ev.pointerId]) return;
+    delete pts[ev.pointerId];
+    nPts = Math.max(0, nPts - 1);
+    clearTimeout(holdTimer);
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    flushMove();
+    if (!nPts) {
+      if (dragging) { dragging = false; pad.classList.remove('drag'); wsSend({ t: 'de' }); }
+      else if (ev.type === 'pointerup' && !moved && !multi && Date.now() - downT < TAP) {
+        var now = Date.now();
+        if (now - lastUp < DBL) { wsSend({ t: 'dc' }); lastUp = 0; }
+        else { wsSend({ t: 'c' }); lastUp = now; }
+      }
+      mid = null; multi = false;
+    } else {
+      var lp = pts[Object.keys(pts)[0]];
+      lastX = lp.x; lastY = lp.y;
+      multi = nPts >= 2;
+      mid = multi ? midpoint() : null;
+    }
+  }
+
+  pad.addEventListener('pointerdown', padDown);
+  pad.addEventListener('pointermove', padMove);
+  pad.addEventListener('pointerup', padEnd);
+  pad.addEventListener('pointercancel', padEnd);
+  if ('onpointerrawupdate' in pad) pad.addEventListener('pointerrawupdate', padMove);
+  // 光标点归中：重新进这一页时不该还留着上次的位置
+  function resetDot() {
+    var r = pad.getBoundingClientRect();
+    dotX = r.width / 2; dotY = r.height / 2; dotOn = false;
+    pad.classList.remove('moved');
+    padDot.style.left = dotX + 'px'; padDot.style.top = dotY + 'px';
+  }
+
+  function remoteKey(k) {
+    wsSend({ t: 'k', k: k });
+  }
+
+  $('rcSend').onclick = function () {
+    var s = $('rcText').value;
+    if (!wsLive) { toast('还没连上电视', true); return; }
+    wsSend({ t: 'txt', s: s, r: true });
+    toast(s ? '已替换电视上聚焦的输入框' : '已清空电视上聚焦的输入框');
+  };
+  $('rcRe').onclick = function () { closeWs(); openWs(); };
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && padOpen && !ws) openWs();
+  });
 
   function refresh(loud) {
     getState().then(function (j) {

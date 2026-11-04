@@ -17,3 +17,10 @@ data class Group(val name: String, val channels: List<Channel>)
 
 /** 登录网址条目：电视端只负责打开它（手机遥控当鼠标），增删改都在配置网页做 */
 data class LoginEntry(val name: String, val url: String)
+
+/**
+ * 遥控指令的去向：登录页在前台时挂上。
+ * 网页（配置服务的 WebSocket）和手机 App（8721 那条裸 TCP）都投到这里，
+ * 收到的 JSON 与协议一致：m/c/dc/ds/de/s/txt/k/nav。
+ */
+typealias RemoteSink = (org.json.JSONObject) -> Unit

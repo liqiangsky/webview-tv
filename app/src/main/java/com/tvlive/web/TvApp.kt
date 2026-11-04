@@ -22,6 +22,9 @@ class TvApp : Application() {
     /** 当前在台上、能执行界面动作的 Activity */
     var host: ConfigServer.ConfigHost? = null
 
+    /** 遥控指令的去向：只有登录页在前台时挂着，不在就是没人能收 */
+    @Volatile var remoteSink: RemoteSink? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -29,6 +32,7 @@ class TvApp : Application() {
         config = ConfigServer(
             CONFIG_PORT, this,
             hostProvider = { host },
+            remoteProvider = { remoteSink },
             pinProvider = { ChannelStore.pin }
         )
         config.start()

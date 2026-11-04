@@ -99,7 +99,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private var listVersion = 0
     private var listBuiltFor: Triple<Int, Int, Int>? = null
 
-    // 从登录页返回后需要重载当前频道（让新登录 cookie 生效）
+    // 登录页返回后要重播当前频道（新 cookie 才用得上）；等窗口拿到焦点再动手
     private var needReloadAfterLogin = false
 
     // 静态脚本磁盘缓存：meta 访问时间异步刷新用的单线程池
@@ -185,6 +185,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     //                      / onPageFinished 里都不再 showTransitionCover，页面连续
     //                      重定向/换源就不会反复黑屏
     // 登录态共享         —— 所有 WebView 共用全局 CookieManager，同域名登录自动携带
+    // 登录页             —— 打开前 stopPlayback() 停掉直播，退出后重播当前频道，新 cookie 才用得上
     // ============================================================================
 
     // 轮询页面里的 blob 视频；一出现就把它铺满视口（不需要全屏 API，不需要用户手势）
@@ -477,9 +478,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         return true
     }
 
+    /** 打开登录页：直播先停下，本页退到后面；退出登录页时重播当前频道 */
     override fun openLogin(url: String) {
         hidePairing()
         hidePanel()
+        stopPlayback()
         needReloadAfterLogin = true
         startActivity(Intent(this, LoginActivity::class.java).putExtra("url", url))
     }
@@ -943,6 +946,20 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         setupWebView()
     }
 
+    /**
+     * 进登录页前把直播停下：掐掉还在跑的请求，再把页面里的 video/audio 全按停。
+     * 回来时不接这半口气的流，直接重播当前频道。
+     */
+    private fun stopPlayback() {
+        webView.stopLoading()
+        webView.removeCallbacks(videoWatch)
+        webView.removeCallbacks(frameWatch)
+        webView.removeCallbacks(fsWatch)
+        webView.removeCallbacks(coverTimeout)
+        if (cssFullscreen) exitCssFullscreen()
+        webView.evaluateJavascript(PAUSE_MEDIA_JS, null)
+    }
+
     /** 沉浸式全屏：隐藏状态栏和导航栏 */
     private fun hideSystemUi() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -1238,7 +1255,6 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         return super.onKeyDown(keyCode, event)
     }
 
-    /** 从登录页返回：登录 cookie 已写进共享 CookieManager，重载当前频道让它生效 */
     override fun onResume() {
         super.onResume()
         // 退后台再回来，系统栏常常又被系统放出来了：画面会被顶进安全区，看着就是“歪了一截”。
@@ -1249,10 +1265,23 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         TvApp.instance.host = this
         // 换过网络后 IP 会变，回到前台就把配对页上的地址和二维码刷成当前值
         if (pairingOpen) pairing?.refresh(configUrl(), ChannelStore.pin)
-        if (needReloadAfterLogin) {
-            needReloadAfterLogin = false
-            playingChannel()?.let { openChannel(it.url) }
-        }
+        reloadAfterLogin()
+    }
+
+    /**
+     * 重播挂起的频道。得等窗口真拿到焦点再起播：onResume 那一刻登录页的窗口常常还没撤干净，
+     * 页面在这半秒里加载，站点自己的播放器常停在“有画面但没播”的状态。
+     */
+    private fun reloadAfterLogin() {
+        if (!needReloadAfterLogin) return
+        if (!hasWindowFocus()) return
+        needReloadAfterLogin = false
+        playingChannel()?.let { openChannel(it.url) }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) reloadAfterLogin()
     }
 
     override fun onPause() {
@@ -1898,6 +1927,15 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               if (!ready) return '0';
               var t = window.__tvFitAt;
               if (t && Date.now() - t < 400) return '2';
+              return '1';
+            })();
+        """
+
+        /** 进登录页：先停掉直播，回来再重播 */
+        const val PAUSE_MEDIA_JS = """
+            (function () {
+              var els = document.querySelectorAll('video, audio');
+              for (var i = 0; i < els.length; i++) { try { els[i].pause(); } catch (e) {} }
               return '1';
             })();
         """

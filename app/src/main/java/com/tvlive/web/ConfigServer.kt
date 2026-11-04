@@ -16,9 +16,12 @@ import java.net.URLDecoder
 /**
  * 配置服务：电视端起一个极简 HTTP 服务器，手机浏览器扫码打开就能管频道和登录网址。
  *
- * 只做四类事：下发 assets/config.html、回显当前数据、执行增删改、让电视切台/开登录页。
+ * 做五类事：下发 assets/config.html、回显当前数据、执行增删改、让电视切台/开登录页、
+ * 以及一条 /remote 的 WebSocket 供网页遥控持续送光标指令。
  * 不是通用服务器——不解析 MIME 协商、不分块传输、不支持 keep-alive，每个请求一个连接，
  * 响应头统一 Connection: close，够用且不容易被边角情况搞崩。
+ * 只有 WebSocket 是长连接：触控板每帧几十个事件走「一次请求一个连接」的 HTTP 会把服务压垮，
+ * 也更没法跟手。
  *
  * 门禁：api 接口必须带 X-Pin 请求头（或 ?pin=）且与电视屏幕显示的 4 位配对码一致，
  * 否则 401。页面本身不校验，否则连输 PIN 的界面都打不开。
@@ -27,6 +30,7 @@ class ConfigServer(
     private val port: Int,
     private val context: Context,
     private val hostProvider: () -> ConfigHost?,
+    private val remoteProvider: () -> RemoteSink?,
     private val pinProvider: () -> String
 ) {
 
@@ -70,7 +74,7 @@ class ConfigServer(
             try {
                 socket.tcpNoDelay = true
                 socket.soTimeout = 8000
-                serve(socket.getInputStream(), socket.getOutputStream())
+                serve(socket)
             } catch (e: Exception) {
                 // 手机提前关连接是常态，但解析/写库出错也要能看见
                 Log.d(TAG, "config 请求中断: $e")
@@ -82,7 +86,9 @@ class ConfigServer(
 
     // ---------------- 请求处理 ----------------
 
-    private fun serve(input: InputStream, out: OutputStream) {
+    private fun serve(socket: Socket) {
+        val input = socket.getInputStream()
+        val out = socket.getOutputStream()
         val head = readHeaderBlock(input) ?: return
         val lines = head.split("\r\n")
         if (lines.isEmpty()) return
@@ -95,6 +101,8 @@ class ConfigServer(
 
         var contentLength = 0
         var headerPin: String? = null
+        var wsKey: String? = null
+        var wantUpgrade = false
         for (i in 1 until lines.size) {
             val c = lines[i].indexOf(':')
             if (c <= 0) continue
@@ -103,20 +111,157 @@ class ConfigServer(
             when (name) {
                 "content-length" -> contentLength = value.toIntOrNull() ?: 0
                 "x-pin" -> headerPin = value
+                "upgrade" -> wantUpgrade = value.equals("websocket", ignoreCase = true)
+                "sec-websocket-key" -> wsKey = value
             }
         }
         val body = if (contentLength > 0) readBody(input, contentLength) else ""
+        val pin = pinOf(headerPin, query)
 
         when {
-            method == "GET" && (path.isEmpty() || path == "config.html") -> sendPage(out)
-            method == "GET" && path == "api/state" ->
-                sendApi(out, pinOf(headerPin, query)) { stateJson() }
-            method == "POST" && path.startsWith("api/") ->
-                sendApi(out, pinOf(headerPin, query)) {
-                    dispatch(path.removePrefix("api/"), parseJson(body))
+            method == "GET" && path == "remote" ->
+                // 网页遥控：先验码再握手，配错就当没这门
+                when {
+                    !wantUpgrade || wsKey.isNullOrEmpty() ->
+                        sendText(out, 400, "text/plain; charset=utf-8", "需要 WebSocket 连接")
+                    pin != pinProvider() -> sendText(out, 401, "text/plain; charset=utf-8", "配对码不正确")
+                    else -> serveRemote(socket, input, out, wsKey)
                 }
+            method == "GET" && (path.isEmpty() || path == "config.html") -> sendPage(out)
+            method == "GET" && path == "api/state" -> sendApi(out, pin) { stateJson() }
+            method == "POST" && path.startsWith("api/") ->
+                sendApi(out, pin) { dispatch(path.removePrefix("api/"), parseJson(body)) }
             else -> sendText(out, 404, "text/plain; charset=utf-8", "not found")
         }
+    }
+
+    /**
+     * 一条网页遥控长连接：握手完只做帧收发，每条消息一个 JSON 指令，投到主线程给登录页。
+     *
+     * 读带 1s 超时，超时的这几拍顺手干两件事：登录页开没开变了就推一条给页面；
+     * 半天收不到任何字节（手机被系统冻结、断网后残留的半开连接）就先探一次、再断开，
+     * 不然工作线程会一直挂着。
+     */
+    private fun serveRemote(socket: Socket, input: InputStream, out: OutputStream, key: String) {
+        out.write(handshake101(key))
+        out.flush()
+        socket.soTimeout = REMOTE_TICK_MS
+        var ready = remoteProvider() != null
+        sendFrame(out, JSONObject().put("t", "ready").put("v", ready).toString())
+        val msg = ByteArrayOutputStream(256)
+        var msgOp = -1
+        var quiet = 0
+        while (!socket.isClosed) {
+            val frame = try {
+                readFrame(input) ?: break
+            } catch (e: java.net.SocketTimeoutException) {
+                quiet++
+                if (quiet % 2 == 0) {
+                    val now = remoteProvider() != null
+                    if (now != ready) {
+                        ready = now
+                        sendFrame(out, JSONObject().put("t", "ready").put("v", ready).toString())
+                    }
+                }
+                if (quiet == REMOTE_PING_TICKS) writeFrame(out, OP_PING, EMPTY_BYTES)
+                if (quiet >= REMOTE_DROP_TICKS) break
+                null
+            } catch (e: Exception) {
+                Log.d(TAG, "遥控连接断开: $e")
+                break
+            } ?: continue
+            quiet = 0
+            if (frame.opcode == OP_CLOSE) {
+                writeFrame(out, OP_CLOSE, frame.data)
+                break
+            }
+            if (frame.opcode == OP_PING) {
+                writeFrame(out, OP_PONG, frame.data)
+                continue
+            }
+            if (frame.opcode == OP_PONG) continue
+            if (frame.opcode == OP_CONT) msg.write(frame.data) else {
+                msg.reset()
+                msg.write(frame.data)
+                msgOp = frame.opcode
+            }
+            if (!frame.fin || msgOp != OP_TEXT) continue
+            val obj = runCatching { JSONObject(String(msg.toByteArray(), Charsets.UTF_8)) }
+                .getOrNull()
+            msg.reset()
+            if (obj != null) main.post { runCatching { remoteProvider()?.invoke(obj) } }
+        }
+    }
+
+    /** 服务端 → 客户端一律不掩码，指令帧都小，走不到扩展长度以外 */
+    private fun sendFrame(out: OutputStream, text: String) =
+        writeFrame(out, OP_TEXT, text.toByteArray(Charsets.UTF_8))
+
+    private fun writeFrame(out: OutputStream, opcode: Int, payload: ByteArray) {
+        runCatching {
+            out.write(0x80 or opcode)
+            when {
+                payload.size < 126 -> out.write(payload.size)
+                payload.size <= 0xFFFF -> {
+                    out.write(126)
+                    out.write(payload.size shr 8 and 0xFF)
+                    out.write(payload.size and 0xFF)
+                }
+                else -> {
+                    out.write(127)
+                    for (i in 7 downTo 0) out.write((payload.size.toLong() shr (8 * i)).toInt() and 0xFF)
+                }
+            }
+            out.write(payload)
+            out.flush()
+        }
+    }
+
+    private fun handshake101(key: String): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("SHA-1")
+            .digest((key + WS_GUID).toByteArray(Charsets.US_ASCII))
+        val accept = android.util.Base64.encodeToString(digest, android.util.Base64.NO_WRAP)
+        return ("HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+            "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray(Charsets.US_ASCII)
+    }
+
+    private class Frame(val fin: Boolean, val opcode: Int, val data: ByteArray)
+
+    /** 读一帧：掩码解掉、扩展长度算好；对端断开返回 null */
+    private fun readFrame(input: InputStream): Frame? {
+        val b0 = input.read()
+        if (b0 < 0) return null
+        val b1 = input.read()
+        if (b1 < 0) return null
+        val len0 = b1 and 0x7F
+        var len = len0
+        if (len0 == 126) len = (readOne(input) shl 8) or readOne(input)
+        else if (len0 == 127) {
+            var v = 0L
+            for (i in 0 until 8) v = (v shl 8) or readOne(input).toLong()
+            len = v.toInt()
+        }
+        if (len > MAX_FRAME) throw IllegalArgumentException("帧过大: $len")
+        val mask = if (b1 and 0x80 != 0) readBytes(input, 4) else null
+        val data = readBytes(input, len)
+        if (mask != null)
+            for (i in data.indices) data[i] = (data[i].toInt() xor mask[i and 3].toInt()).toByte()
+        return Frame(b0 and 0x80 != 0, b0 and 0x0F, data)
+    }
+
+    private fun readOne(input: InputStream): Int =
+        input.read().also { if (it < 0) throw java.io.EOFException() }
+
+    private fun readBytes(input: InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var got = 0
+        while (got < n) {
+            val r = input.read(buf, got, n - got)
+            if (r < 0) throw java.io.EOFException()
+            got += r
+        }
+        return buf
     }
 
     /**
@@ -236,6 +381,7 @@ class ConfigServer(
             .put("groups", gs)
             .put("logins", logins)
             .put("playing", playing ?: JSONObject.NULL)
+            .put("remoteReady", remoteProvider() != null)
             .put("device", android.os.Build.MODEL)
             .let { if (added >= 0) it.put("added", added) else it }
             .toString()
@@ -314,5 +460,20 @@ class ConfigServer(
     companion object {
         private const val TAG = "TvWeb"
         @Volatile private var pageCache: ByteArray? = null
+
+        // WebSocket 帧
+        private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        private const val OP_CONT = 0x0
+        private const val OP_TEXT = 0x1
+        private const val OP_CLOSE = 0x8
+        private const val OP_PING = 0x9
+        private const val OP_PONG = 0xA
+        private const val MAX_FRAME = 64 * 1024
+        private val EMPTY_BYTES = ByteArray(0)
+
+        /** 遥控连接的读取节拍：1s 没动静算一拍，20 拍探一次活，90 拍还没消息就断开 */
+        private const val REMOTE_TICK_MS = 1_000
+        private const val REMOTE_PING_TICKS = 20
+        private const val REMOTE_DROP_TICKS = 90
     }
 }

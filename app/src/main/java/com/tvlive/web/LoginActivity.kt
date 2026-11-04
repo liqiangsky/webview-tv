@@ -115,15 +115,22 @@ class LoginActivity : Activity() {
 
         val url = intent.getStringExtra("url")
         if (url != null) webView.loadUrl(url)
-        Toast.makeText(this, "登录完成后按返回键退出，播放页会自动刷新登录状态", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "电视上的直播已暂停，登录完按返回键退出会自动重播当前频道", Toast.LENGTH_LONG).show()
 
         server = RemoteServer(REMOTE_PORT, this::onCommand) { n -> updateStatus(n) }
         server?.start()
+        // 配置网页的遥控走 8723 的 WebSocket，指令落到同一个入口；本页在前台时才有去处
+        (application as TvApp).remoteSink = remoteSink
         updateStatus(0)
     }
 
+    /** 网页指令的挂出对象：销毁时要确认挂着的还是自己，别把后继登录页的注册抹掉 */
+    private val remoteSink: RemoteSink = { onCommand(it) }
+
     override fun onDestroy() {
         server?.stop()
+        val app = application as TvApp
+        if (app.remoteSink === remoteSink) app.remoteSink = null
         super.onDestroy()
     }
 
@@ -342,7 +349,8 @@ class LoginActivity : Activity() {
      * 桥还没建立（用户还没点过输入框）时退回 JS（native value setter + input 事件）。
      */
     private fun injectText(text: String, replace: Boolean) {
-        if (text.isEmpty()) return
+        // 空内容 + 替换 = 清空这个框，只有追加时才真没内容可写
+        if (text.isEmpty() && !replace) return
         val conn = webView.capturedConnection
             ?: webView.onCreateInputConnection(EditorInfo())
         if (conn is BaseInputConnection) {
@@ -377,7 +385,7 @@ class LoginActivity : Activity() {
     private fun updateStatus(clients: Int) {
         val ip = localIp() ?: "未联网?"
         statusText.text = "遥控 $ip:$REMOTE_PORT · 已连接手机 $clients" +
-            if (clients > 0) " ✔" else "（手机输入此 IP 连接）"
+            if (clients > 0) " ✔" else "（手机遥控 App 或配置网页「电视遥控」）"
     }
 
     private fun localIp(): String? {
