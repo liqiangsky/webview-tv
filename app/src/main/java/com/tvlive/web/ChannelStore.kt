@@ -305,6 +305,24 @@ object ChannelStore {
         }
     }
 
+    fun updateLogin(oldUrl: String, name: String, url: String): Result<Unit> {
+        val o = oldUrl.trim()
+        val u = url.trim()
+        if (!u.startsWith("http://") && !u.startsWith("https://"))
+            return Result.failure(IllegalArgumentException("地址要以 http:// 或 https:// 开头"))
+        return mutateLogins { list ->
+            val i = list.indexOfFirst { it.url == o }
+            when {
+                i < 0 -> fail("地址不存在，请刷新后重试")
+                u != o && list.any { it.url == u } -> fail("该地址已存在")
+                else -> {
+                    list[i] = LoginEntry(name.trim().ifEmpty { hostOf(u) }, u)
+                    Result.success(Unit)
+                }
+            }
+        }
+    }
+
     fun deleteLogin(url: String): Result<Unit> = mutateLogins { list ->
         val before = list.size
         list.removeAll { it.url == url }

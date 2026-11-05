@@ -52,7 +52,7 @@ import java.util.concurrent.Executors
  * 左 频道信息（在播/预览、EPG、进度、时间，纯展示）；
  * 中 频道列表（上下选台、左右换组、OK 切台并收起，键位与最初设计一致）；
  * 右 手机配置二维码（地址/配对码，电视端只展示回显）。
- * 网站登录不在电视上列条目——手机配置页里点「在电视上打开」，电视直接开该站登录页。
+ * 网站登录不在电视上列条目——手机配置页里点条目的「打开」，电视直接开该站登录页。
  * 频道与登录网址全部由配置网页写入，电视端只读展示；BACK 收起遮罩。
  */
 class MainActivity : Activity(), ConfigServer.ConfigHost {
@@ -246,7 +246,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         }
     }
 
-    // 起播兜底：点台后 10 秒内没等到视频首帧，就当这个台起不来，收黑幕并显示错误页。
+    // 起播兜底：点台后 15 秒内没等到视频首帧，就当这个台起不来，收黑幕并显示错误页。
     // 计时只在 openChannel 起一次，页面中途重定向/换源不再续表（有些页面会一直跳）
     private val coverTimeout = Runnable {
         playTimeoutArmed = false
@@ -487,7 +487,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         startActivity(Intent(this, LoginActivity::class.java).putExtra("url", url))
     }
 
-    /** 左栏整体重画：组名/计数 + 换组箭头可用性 + 当前分组的频道列表 */
+    /** 中栏整体重画：组名/计数 + 换组箭头可用性 + 当前分组的频道列表 */
     private fun renderPanel() {
         val g = groups.getOrNull(curGroupIdx)
         groupName.text = g?.name ?: "暂无频道"
@@ -1616,7 +1616,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         const val ERROR_URL = "file:///android_asset/error.html"
 
         // 起播超时：点台后这么久还没等到视频首帧，就关掉网页显示错误页
-        const val PLAY_TIMEOUT_MS = 10_000L
+        const val PLAY_TIMEOUT_MS = 15_000L
         // 首帧到位后黑幕最多再压这么久等容器停稳：页面缩放一般一两拍内就收敛了
         const val FRAME_SETTLE_MS = 1_200L
         const val PLAY_ERROR_TEXT = "该频道暂时无法播放"

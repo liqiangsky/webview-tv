@@ -28,6 +28,9 @@ class TvApp : Application() {
     /** 网页遥控连上/断开的人数回报，同样只挂给前台登录页 */
     @Volatile var remoteCount: ((Int) -> Unit)? = null
 
+    /** 登录页当前的页面缩放百分比：没有登录页时是原始大小 */
+    @Volatile var remoteZoom: Int = 100
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -37,6 +40,7 @@ class TvApp : Application() {
             hostProvider = { host },
             remoteProvider = { remoteSink },
             remoteCount = { n -> remoteCount?.invoke(n) },
+            zoomProvider = { remoteZoom },
             pinProvider = { ChannelStore.pin }
         )
         config.start()

@@ -9,17 +9,17 @@
 - **播放层**：全屏 WebView（`activity_main.xml` 的 `webView`），横屏、沉浸式、屏蔽网页自身的按键和触摸
 - **操作面板**（`panel_overlay.xml`，按 OK / 点屏呼出，tvOS 视觉语言）：一屏三列，键位与最初设计一致
   - **左 · 频道信息**（`panel_info.xml`，纯展示）：在播/预览状态、清晰度、频道名、在播节目、时段与剩余时间、进度线、下一档、系统时间日期
-  - **中 · 频道列表**（`item_panel_channel.xml`，在播台带声波角标 `BadgeIconView`）：组头显示「第几组 / 共几组 · 多少个」，两侧箭头供触屏换组
+  - **中 · 频道列表**（行视图代码直搭，不 XML inflate）：组头显示「第几组 / 共几组 · 多少个」，两侧箭头供触屏换组；在播台带声波角标（`BadgeIconView`）
   - **右 · 手机配置**：手机配置的二维码（本地 zxing 生成，配置地址不出内网）、`<电视IP>:8723` 与 4 位配对码、换码按钮
-  - 网站登录不在电视上列条目：手机配置页里点「在电视上打开」，电视直接开该站登录页（`LoginActivity`），登录态存在电视的 Cookie 里
+  - 网站登录不在电视上列条目：手机配置页里点条目的「打开」，电视直接开该站登录页（`LoginActivity`），登录态存在电视的 Cookie 里
 - **按键与触屏**：频道列表里左右换组、上下选台、OK 切台并收起面板；Back 收起面板。触屏下点组头箭头换组、点频道行直接切台（首次点击即播放）、点「换一组」重发配对码
-- **焦点与播放解耦**：光标停在哪个台就预览哪个台的信息，切台不影响浏览位置；分组与行号记在 `SharedPreferences(panel_focus)`
+- **焦点与播放解耦**：光标停在哪个台就预览哪个台的信息，切台不影响浏览位置；只记上次浏览的分组（`SharedPreferences(panel_focus)` 存 `group`），组内落点由该组在播频道决定，不记行号
 - 面板打开时底层视频继续播放，整块背景压暗让画面透出来；同时对视频层下发高斯模糊（API 31+ `RenderEffect`，部分内核的视频走独立 Surface，实际可能不生效）
 
 ## 播放链路
 
 1. **换台重建实例**（`recreateWebView()`）：复用旧实例会残留上一个站点的文档，导致新页面起不了播、铺不满屏
-2. **全黑过渡遮罩**：打开页面前盖住正在加载的网页，等视频真正出首帧（`requestVideoFrameCallback`）才 700ms 渐隐；10 秒还没首帧就收幕并跳错误页
+2. **全黑过渡遮罩**：打开页面前盖住正在加载的网页，等视频真正出首帧（`requestVideoFrameCallback`）才 700ms 渐隐；15 秒还没首帧就收幕并跳错误页
 3. **自动全屏**（`APPLY_FS_JS`，`videoWatch` 每 800ms 轮询）：挑页面上面积最大、且确实在放画面的 `video`（含同源 iframe）——
    src 是 `blob:` / m3u8/flv/mp4 这类媒体地址，或者已经解出帧（`videoWidth > 0`，播放器把 MediaStream 挂到
    `srcObject` 上时 src 是空的），用 CSS 铺满视口——不依赖浏览器全屏 API、不需要用户手势
@@ -32,7 +32,7 @@
 - **不加载样式类资源**：`BLOCK_STYLE_RESOURCES` 拦掉网页的 CSS / 图片 / 字体 / manifest（按 `Sec-Fetch-Dest` 判断，老内核按扩展名兜底），视频与 JS 一律放行
 - **埋点整域拦截**：`TRACKING_HOSTS`（GA、hm.baidu.com、umeng、cnzz、sensorsdata…）返回空响应，播放器不感知
 - **静态脚本磁盘缓存**（`SERVE_FROM_SCRIPT_CACHE`）：脚本请求未命中缓存就当场下载并留存，下次秒回；按域名分组，单文件上限 6MB、总预算 80MB，文件名带内容哈希/版本号的按不可变资源缓存 7 天；回灌时补齐 CORS 响应头，否则 `crossorigin` 脚本会被内核判加载失败
-- **错误页**：本地 [error.html](app/src/main/assets/error.html) 只居中显示一句提示，没有按钮。两种进入方式：主文档加载失败（`onReceivedError`），或点台后 10 秒内没等到视频首帧（`PLAY_TIMEOUT_MS`，计时从 `openChannel` 起、中途重定向不续表）—— 后者先 `stopLoading()` 掐掉起不来的网页再跳页，带 `?msg=该频道暂时无法播放`
+- **错误页**：本地 [error.html](app/src/main/assets/error.html) 只居中显示一句提示，没有按钮。两种进入方式：主文档加载失败（`onReceivedError`），或点台后 15 秒内没等到视频首帧（`PLAY_TIMEOUT_MS`，计时从 `openChannel` 起、中途重定向不续表）—— 后者先 `stopLoading()` 掐掉起不来的网页再跳页，带 `?msg=该频道暂时无法播放`
 - PC 桌面 UA（`TV_USER_AGENT`，网站才会下发电脑版而不是 App 版）、`mediaPlaybackRequiresUserGesture=false`、允许混合内容、放行第三方 Cookie
 
 ## 数据：频道与登录网址
@@ -59,10 +59,10 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 - **门禁**：写接口必须带 `X-Pin` 请求头（或 `?pin=`）且与屏幕上显示的配对码一致；配对码可在电视上「换一组」
 - **读**：`GET /` 配置页，`GET /api/state` 回当前分组、频道、登录网址、在播状态和 `remoteReady`（登录页在不在前台）
 - **写**（`POST /api`，`{"op":..}`）：`ch.add` / `ch.upd` / `ch.del` / `ch.import` / `ch.clear` /
-  `group.add` / `group.rename` / `group.del` / `login.add` / `login.del` / `pin.regenerate`，
+  `group.add` / `group.rename` / `group.del` / `login.add` / `login.upd` / `login.del` / `pin.regenerate`，
   另有 `play`、`login.open` 让手机直接遥控电视
 - **遥控通道**：`GET /remote?pin=`（同 8723 端口）升级成 WebSocket，逐条 JSON 指令与下表一致；
-  握手前先验配对码，登录后页开着才收，登录页不在前台时推 `{"t":"ready","v":false}` 让页面提示
+  握手前先验配对码，登录页开着才收，登录页不在前台时推 `{"t":"ready","v":false}` 让页面提示
 - 数据变更后 `ChannelStore.onChanged` 回主线程重画面板，手机改完电视立刻可见
 
 ## 节目单（EPG）
@@ -98,6 +98,9 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
   而普通 http 页面拿不到系统的屏幕常亮，所以登录时得自己保持亮屏
 - **触控板手势**（网页的 `#pad`）：单指滑动=移动、轻点=单击、二连点=双击、
   长按后滑动=拖拽、双指滑动=滚轮；快捷键是 Tab / 返回 / 刷新
+- **页面缩放**：网页的「缩放」行和电视上登录页的 `－ / 1× / ＋` 共用同一套档位——手机只发方向，
+  电视算步进（一档 ±0.1，30%~400%），做法是往 `documentElement` 打 CSS `zoom`；
+  档位由电视回推，两边的读数不会各算各的
 
 协议（一条消息一个 JSON）：
 
@@ -106,10 +109,12 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 | `{"t":"m","dx":..,"dy":..}` | 相对位移（单位 dp） |
 | `{"t":"c"}` / `{"t":"dc"}` | 单击 / 双击 |
 | `{"t":"ds"}` … `{"t":"de"}` | 拖拽开始 / 结束（期间用 `m` 移动） |
-| `{"t":"s","dy":..}` | 滚轮 |
+| `{"t":"s","dx":..,"dy":..}` | 滚轮 |
 | `{"t":"txt","s":"..","r":true}` | 文字，`r` 是否整体替换 |
-| `{"t":"k","k":"enter\|tab\|del\|back\|refresh"}` | 按键 |
+| `{"t":"k","k":"enter\|tab\|del\|esc\|back\|refresh"}` | 按键 |
 | `{"t":"nav","u":"https://.."}` | 登录页跳转地址 |
+| `{"t":"z","d":-1\|0\|1}` | 缩放：减一档 / 回 1× / 加一档 |
+| `{"t":"z","v":100}` | 电视回推的当前档位（百分比），连上和每次改动都推 |
 
 ### 没有实体电视，怎么测
 
@@ -170,5 +175,4 @@ app/src/main/java/com/tvlive/web/
 app/src/main/res/layout/
   panel_overlay.xml      面板：左 频道信息 / 中 频道列表 / 右 手机配置二维码
   panel_info.xml         左列频道信息（状态、清晰度、频道名、EPG、剩余时间、下一档、时间；纯展示不参与焦点）
-  item_panel_channel.xml 频道列表行（含在播声波角标）
 ```

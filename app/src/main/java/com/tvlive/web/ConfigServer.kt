@@ -33,6 +33,7 @@ class ConfigServer(
     private val hostProvider: () -> ConfigHost?,
     private val remoteProvider: () -> RemoteSink?,
     private val remoteCount: (Int) -> Unit,
+    private val zoomProvider: () -> Int,
     private val pinProvider: () -> String
 ) {
 
@@ -48,6 +49,9 @@ class ConfigServer(
 
     /** 在连的网页遥控数：登录页左上角那行状态字要跟着报数 */
     private val remoteClients = AtomicInteger(0)
+
+    /** 在连遥控页的输出流：电视这边改了缩放要主动推回去，不能让页面猜 */
+    private val remoteStreams = java.util.concurrent.CopyOnWriteArrayList<OutputStream>()
 
     fun start() {
         if (server != null) return
@@ -154,7 +158,9 @@ class ConfigServer(
         val n = remoteClients.incrementAndGet()
         main.post { remoteCount(n) }
         var ready = remoteProvider() != null
+        remoteStreams.add(out)
         sendFrame(out, JSONObject().put("t", "ready").put("v", ready).toString())
+        sendFrame(out, JSONObject().put("t", "z").put("v", zoomProvider()).toString())
         val msg = ByteArrayOutputStream(256)
         var msgOp = -1
         var quiet = 0
@@ -200,6 +206,23 @@ class ConfigServer(
         }
         val left = remoteClients.decrementAndGet()
         main.post { remoteCount(left) }
+        remoteStreams.remove(out)
+    }
+
+    /**
+     * 把电视这边的缩放读数推给所有在连的遥控页。
+     * 走一条串行队列：两次快按各起一个线程写，帧的先后顺序就可能翻过来。
+     */
+    fun pushRemoteState() {
+        if (remoteStreams.isEmpty()) return
+        val text = JSONObject().put("t", "z").put("v", zoomProvider()).toString()
+        pushExec.execute {
+            remoteStreams.forEach { sendFrame(it, text) }
+        }
+    }
+
+    private val pushExec = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "remote-push").apply { isDaemon = true }
     }
 
     /** 服务端 → 客户端一律不掩码，指令帧都小，走不到扩展长度以外 */
@@ -207,22 +230,25 @@ class ConfigServer(
         writeFrame(out, OP_TEXT, text.toByteArray(Charsets.UTF_8))
 
     private fun writeFrame(out: OutputStream, opcode: Int, payload: ByteArray) {
-        runCatching {
-            out.write(0x80 or opcode)
-            when {
-                payload.size < 126 -> out.write(payload.size)
-                payload.size <= 0xFFFF -> {
-                    out.write(126)
-                    out.write(payload.size shr 8 and 0xFF)
-                    out.write(payload.size and 0xFF)
+        // 同一个连接可能有两个写入方（收指令的那条线程 + 推送队列），一帧拆开会废掉连接
+        synchronized(out) {
+            runCatching {
+                out.write(0x80 or opcode)
+                when {
+                    payload.size < 126 -> out.write(payload.size)
+                    payload.size <= 0xFFFF -> {
+                        out.write(126)
+                        out.write(payload.size shr 8 and 0xFF)
+                        out.write(payload.size and 0xFF)
+                    }
+                    else -> {
+                        out.write(127)
+                        for (i in 7 downTo 0) out.write((payload.size.toLong() shr (8 * i)).toInt() and 0xFF)
+                    }
                 }
-                else -> {
-                    out.write(127)
-                    for (i in 7 downTo 0) out.write((payload.size.toLong() shr (8 * i)).toInt() and 0xFF)
-                }
+                out.write(payload)
+                out.flush()
             }
-            out.write(payload)
-            out.flush()
         }
     }
 
@@ -430,6 +456,8 @@ class ConfigServer(
                 .fold({ stateJson() }, { fail(it.message ?: "添加失败") })
             "login.del" -> return ChannelStore.deleteLogin(arg.str("url"))
                 .fold({ stateJson() }, { fail(it.message ?: "删除失败") })
+            "login.upd" -> return ChannelStore.updateLogin(arg.str("oldUrl"), arg.str("name"), arg.str("url"))
+                .fold({ stateJson() }, { fail(it.message ?: "修改失败") })
             "pin.regenerate" -> return ok(JSONObject().put("pin", ChannelStore.regeneratePin()))
             "play" -> {
                 val ch = Channel(

@@ -153,10 +153,13 @@
   .frow input { flex: 1; min-width: 0; background: none; border: 0; color: var(--fg);
     font: inherit; font-size: 16px; padding: 2px 0; }
   .frow input:focus { outline: none; }
-  /* 只读的值（分组这类单选项），排版和输入框对齐 */
-  .frow .val { flex: 1; min-width: 0; font-size: 16px; color: var(--fg);
-    overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .frow .val.ph { color: var(--dim); }
+  /* 下拉：去掉系统外观，跟同行的输入框一样只剩一行文字加箭头 */
+  .frow select { flex: 1; min-width: 0; appearance: none; -webkit-appearance: none;
+    background: none; border: 0; color: var(--fg); font: inherit; font-size: 16px; padding: 2px 0; }
+  .frow select:focus { outline: none; }
+  .frow select.ph { color: var(--dim); }
+  .frow .caret { flex: none; width: 0; height: 0; border: 5px solid transparent;
+    border-top: 6px solid var(--dim); margin-top: 3px; }
   .frow.col { flex-direction: column; align-items: stretch; gap: 6px; }
   .frow.col label { width: auto; }
   textarea { width: 100%; background: var(--card); color: var(--fg); border: 0;
@@ -165,9 +168,8 @@
     font-size: 13px; line-height: 1.6; letter-spacing: 0; }
   textarea:focus { outline: none; }
   .hint { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 10px 6px 0; }
-  /* 快捷选项：点一下选中，省掉打字和系统下拉 */
+  /* 快捷选项：点一下就用，遥控键和导入模式这类二选一 */
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 6px 0; }
-  .chipnote { color: var(--dim); font-size: 13px; line-height: 26px; }
   .chip { background: var(--fill); border: 0; color: var(--dim2); border-radius: 980px;
     padding: 6px 13px; font-size: 14px; font-family: inherit; transition: all .15s; }
   .chip.on { background: var(--accent); color: #fff; font-weight: 600; }
@@ -303,7 +305,8 @@
   <div class="pmain">
     <div class="group" id="loginList"></div>
     <div class="hint">点条目右侧「打开」，电视会全屏打开这个网址并等手机遥控——点按钮、输账号密码
-      用「电视遥控」页的触控板。登录完按返回退出，电视会自动重播刚才那个台。</div>
+      用「电视遥控」页的触控板。登录完按返回退出，电视会自动重播刚才那个台。<br>
+      点条目本身可以改名称或地址。</div>
   </div>
 </div>
 
@@ -325,6 +328,12 @@
     <div class="chips">
       <button class="chip key" data-rk="back">返回上一页</button>
       <button class="chip key" data-rk="refresh">刷新页面</button>
+    </div>
+    <div class="sec"><b>缩放</b><span class="sp"></span><span class="cnt" id="rcZoom">100%</span></div>
+    <div class="chips">
+      <button class="chip key" data-zk="-1">－</button>
+      <button class="chip key" data-zk="0">1×</button>
+      <button class="chip key" data-zk="1">＋</button>
     </div>
     <div class="sec"><b>输入框</b></div>
     <div class="group">
@@ -393,13 +402,11 @@
     </div>
     <div class="group">
       <div class="frow"><label>名称</label><input id="eName" placeholder="频道A"></div>
-      <div class="frow"><label>分组</label><span class="val" id="eGroupShow"></span></div>
-      <div class="frow"><label>清晰度</label><input id="eQuality" placeholder="HD"></div>
+      <div class="frow"><label>分组</label><select id="eGroup"></select><span class="caret"></span></div>
+      <div class="frow"><label>清晰度</label><select id="eQuality"></select><span class="caret"></span></div>
       <div class="frow col"><label>播放地址</label>
         <input id="eUrl" inputmode="url" placeholder="https://..."></div>
     </div>
-    <div class="chips" id="gChips"></div>
-    <div class="chips" id="qChips"></div>
     <button class="act-full danger" id="eDel" hidden>删除该频道</button>
   </div>
 </div>
@@ -408,7 +415,7 @@
   <div class="sheet">
     <div class="nav">
       <button class="lnk" id="lCancel">取消</button>
-      <h2>添加登录网址</h2>
+      <h2 id="lnTitle">添加登录网址</h2>
       <button class="lnk b" id="lSave">保存</button>
     </div>
     <div class="group">
@@ -446,7 +453,9 @@
   var editing = null;
   // 分组弹层编辑的原组名：null 表示新建
   var editingGroup = null;
-  // 频道弹层里选中的分组，只能从下面的分组里单选
+  // 登录网址弹层编辑的原地址：'' 表示新增，否则保存时走 login.upd
+  var editingLogin = '';
+  // 频道弹层里选中的分组，下拉里没有第三态：要么选中某个组，要么空着等用户挑
   var editGroup = '';
   // 上次渲染用的数据指纹：没变就不重画，免得轮询打断折叠、确认一类的中间状态
   var lastSig = '';
@@ -529,7 +538,8 @@
     renderChannels();
     renderGroups();
     renderLogins();
-    renderChips();
+    // 弹层没开着就别动下拉：重排选项会打断正在选的那个原生选择器
+    if (!$('editMask').hidden) renderPicks($('eQuality').value);
   }
 
   function collapsed() {
@@ -601,10 +611,11 @@
       return;
     }
     host.innerHTML = state.logins.map(function (l) {
-      return '<div class="row"><div class="txt"><div class="nm">' + esc(l.name) + '</div>' +
+      return '<div class="row" data-ledit="' + esc(l.url) + '"><div class="txt"><div class="nm">' + esc(l.name) + '</div>' +
         '<div class="u">' + esc(l.url) + '</div></div>' +
         '<button class="lnk" data-lopen="' + esc(l.url) + '">打开</button>' +
-        '<button class="lnk sm danger" data-ldel="' + esc(l.url) + '">删</button></div>';
+        '<button class="lnk sm danger" data-ldel="' + esc(l.url) + '">删</button>' +
+        '<span class="chev"></span></div>';
     }).join('');
   }
 
@@ -622,17 +633,21 @@
     }).join('');
   }
 
-  function renderChips() {
-    var show = $('eGroupShow');
-    show.textContent = editGroup || '请选择分组';
-    show.className = 'val' + (editGroup ? '' : ' ph');
-    $('gChips').innerHTML = state.groups.length ? state.groups.map(function (g) {
-      return '<button class="chip' + (g.name === editGroup ? ' on' : '') + '" data-g="' + esc(g.name) + '">' +
-        esc(g.name) + '</button>';
-    }).join('') : '<span class="chipnote">还没有分组，保存后归到「其他频道」</span>';
-    var q = $('eQuality').value.trim();
-    $('qChips').innerHTML = QUALITIES.map(function (x) {
-      return '<button class="chip' + (x === q ? ' on' : '') + '" data-q="' + x + '">' + x + '</button>';
+  /** 分组、清晰度的下拉：选项按当前状态现拼，选中项标出来 */
+  function renderPicks(quality) {
+    var has = state.groups.length;
+    $('eGroup').innerHTML = '<option value="" disabled hidden' + (editGroup ? '' : ' selected') + '>'
+      + (has ? '请选择分组' : '还没有分组，保存后归到「其他频道」') + '</option>'
+      + state.groups.map(function (g) {
+          return '<option' + (g.name === editGroup ? ' selected' : '') + '>' + esc(g.name) + '</option>';
+        }).join('');
+    $('eGroup').classList.toggle('ph', !editGroup);
+    var q = (quality || '').trim() || 'HD';
+    var qs = QUALITIES.slice();
+    // 页面里已有别的写法（例如「1080P」），选项里没有就补一条，免得保存时被改掉
+    if (qs.indexOf(q) < 0) qs.unshift(q);
+    $('eQuality').innerHTML = qs.map(function (x) {
+      return '<option' + (x === q ? ' selected' : '') + '>' + esc(x) + '</option>';
     }).join('');
   }
 
@@ -677,8 +692,8 @@
   }
 
   document.body.addEventListener('click', function (ev) {
-    var t = ev.target.closest('[data-page],[data-play],[data-edit],[data-lopen],[data-ldel],' +
-      '[data-gedit],[data-fold],[data-g],[data-q],[data-rk],[data-back]');
+    var t = ev.target.closest('[data-page],[data-play],[data-edit],[data-lopen],[data-ldel],[data-ledit],' +
+      '[data-gedit],[data-fold],[data-rk],[data-zk],[data-back]');
     if (!t) return;
     var d = t.dataset;
     function act(op, body, msg) {
@@ -692,6 +707,8 @@
       show($('p-' + d.page));
     } else if (d.rk != null) {
       remoteKey(d.rk);
+    } else if (d.zk != null) {
+      remoteZoom(+d.zk);
     } else if (d.play != null) {
       var p = findChannel(d.play);
       if (p) act('play', { group: p.g, name: p.ch.name, url: p.ch.url, line: p.ch.line }, '电视已切台');
@@ -708,14 +725,10 @@
       }).catch(function () {});
     } else if (d.ldel != null) {
       arm(t, '确认', function () { act('login.del', { url: d.ldel }, '已删除'); });
+    } else if (d.ledit != null) {
+      openLogin(d.ledit);
     } else if (d.gedit != null) {
       openGroup(d.gedit);
-    } else if (d.g != null) {
-      editGroup = d.g;
-      renderChips();
-    } else if (d.q != null) {
-      $('eQuality').value = d.q;
-      renderChips();
     } else if (d.fold != null) {
       // 只切类名，不重画整张列表：滚动位置和别的分组状态都留着
       var sect = t.closest('.sect');
@@ -729,13 +742,12 @@
     editing = hit || null;
     $('editTitle').textContent = hit ? '编辑频道' : '添加频道';
     $('eName').value = hit ? hit.ch.name : '';
-    // 新增时不猜分组：只有一个组才替用户选好，否则等他自己点
+    // 新增时不猜分组：只有一个组才替用户选好，否则留空等他自己挑
     editGroup = hit ? hit.g : (state.groups.length === 1 ? state.groups[0].name : '');
     $('eUrl').value = hit ? hit.ch.url : '';
-    $('eQuality').value = hit ? (hit.ch.quality || 'HD') : 'HD';
     $('eDel').hidden = !hit;
     disarm($('eDel'));
-    renderChips();
+    renderPicks(hit ? hit.ch.quality : 'HD');
     show($('editMask'));
     if (!hit) $('eName').focus();
   }
@@ -829,7 +841,10 @@
     }).catch(function () {});
   };
 
-  $('eQuality').addEventListener('input', renderChips);
+  $('eGroup').addEventListener('change', function () {
+    editGroup = this.value;
+    this.classList.toggle('ph', !editGroup);
+  });
   $('find').addEventListener('input', renderChannels);
   $('findX').onclick = function () { $('find').value = ''; renderChannels(); };
 
@@ -876,14 +891,23 @@
     return u;
   }
 
-  function openLoginAdd() {
-    $('lnName').value = '';
-    $('lnUrl').value = '';
+  function findLogin(url) {
+    for (var i = 0; i < state.logins.length; i++) if (state.logins[i].url === url) return state.logins[i];
+    return null;
+  }
+
+  /** 带原地址进来就是改这一条，否则是新增 */
+  function openLogin(oldUrl) {
+    var hit = findLogin(oldUrl);
+    editingLogin = hit ? hit.url : '';
+    $('lnTitle').textContent = hit ? '编辑登录网址' : '添加登录网址';
+    $('lnName').value = hit ? hit.name : '';
+    $('lnUrl').value = hit ? hit.url : '';
     show($('loginMask'));
     $('lnName').focus();
   }
 
-  $('addLogin').onclick = openLoginAdd;
+  $('addLogin').onclick = function () { openLogin(''); };
   // 触控板入口放在「＋」左边：开完登录网址下一步就是它，少绕一层
   // 不把「网站登录」收掉：遥控页返回时退回它，而不是直接掉回首页
   $('rcFromLogin').onclick = function () {
@@ -895,10 +919,13 @@
   $('lSave').onclick = function () {
     var name = $('lnName').value.trim(), url = normUrl($('lnUrl').value);
     if (!url) { toast('网址格式不正确，例：https://example.com/login', true); return; }
-    api('login.add', { name: name, url: url }).then(function (r) {
+    var op = editingLogin ? 'login.upd' : 'login.add';
+    var body = editingLogin
+      ? { oldUrl: editingLogin, name: name, url: url } : { name: name, url: url };
+    api(op, body).then(function (r) {
       handle(r);
       hide($('loginMask'));
-      toast('已添加');
+      toast(editingLogin ? '已保存' : '已添加');
     }).catch(function () {});
   };
   var replaceMode = false;
@@ -956,6 +983,8 @@
       var j = null;
       try { j = JSON.parse(ev.data); } catch (e) {}
       if (j && j.t === 'ready') { tvReady = !!j.v; renderRemote(); }
+      // 缩放读数只认电视回报：两边按的是同一份档位
+      if (j && j.t === 'z') $('rcZoom').textContent = (j.v || 100) + '%';
     };
     s.onclose = function () {
       if (ws !== s) return;
@@ -1111,6 +1140,11 @@
 
   function remoteKey(k) {
     wsSend({ t: 'k', k: k });
+  }
+
+  // 缩放发给电视，由电视算档位：电视上的按钮和这里的按钮按同一套步进，不会各算各的
+  function remoteZoom(d) {
+    wsSend({ t: 'z', d: d });
   }
 
   $('rcSend').onclick = function () {
