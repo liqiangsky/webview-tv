@@ -18,13 +18,24 @@ class CursorView(context: Context) : View(context) {
     private var cy = 0f
     private var initialized = false
 
+    /** 阴影圈：浅底页面（白背景、白输入框）上把光标压出来 */
+    private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x80000000.toInt()
+        style = Paint.Style.FILL
+    }
+    /** 半透明白底：深底视频画面上也留得下一块亮区 */
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x40FFFFFF
+        style = Paint.Style.FILL
+    }
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.STROKE
-        strokeWidth = 2.5f * density
+        strokeWidth = 3f * density
     }
+    /** 中心实心点：真正的点击落点 */
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF2B7FFF.toInt()
+        color = Color.WHITE
         style = Paint.Style.FILL
     }
 
@@ -51,9 +62,11 @@ class CursorView(context: Context) : View(context) {
     fun curY(): Float = cy
 
     override fun onDraw(canvas: Canvas) {
-        val r = 9f * density
+        val r = 15f * density
+        canvas.drawCircle(cx, cy, r + 3f * density, shadow)
+        canvas.drawCircle(cx, cy, r, fill)
         canvas.drawCircle(cx, cy, r, ring)
-        canvas.drawCircle(cx, cy, 3f * density, dot)
+        canvas.drawCircle(cx, cy, 3.5f * density, dot)
     }
 
     // 本层不吃任何触摸，全部交给底下的 WebView（触屏调试时也能直接点页面）

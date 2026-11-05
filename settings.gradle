@@ -15,4 +15,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "TvLiveWeb"
 include ':app'
-include ':phone'

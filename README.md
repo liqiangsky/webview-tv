@@ -71,7 +71,7 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 - 每天 00:25 `AlarmManager` 定时拉取，`EpgReceiver` 在开机后重新排闹钟；解析结果落盘
 - 保留窗口：已播 36 小时 ~ 未播 26 小时；按频道名匹配，匹配不上再拿第三列的节目别名试一次
 
-## 手机遥控登录（配置网页 + 配套 `phone` 模块）
+## 手机遥控登录（配置网页的「电视遥控」页）
 
 有些直播网页要登录才能看，但电视上没法打字。手机在配置页的登录网址上点「打开」
 （即向电视发 `login.open`），电视打开一个可交互的登录 WebView（`LoginActivity`），手机当鼠标，
@@ -80,27 +80,26 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 重播不在 `onResume` 里立刻做 —— 那一刻登录页的窗口常常还没撤干净，页面在这半秒里加载，
 站点自己的播放器容易停在「有画面但没播」的状态，所以挂到窗口真正拿到焦点（`onWindowFocusChanged`）才起播。
 
-遥控有两个入口，指令与手势完全相同：**配置网页的「电视遥控」页**（从「网站登录」顶栏「＋」左边的图标进，
-走 8723 的 WebSocket，不用装 App），以及 `phone` 模块的触控板 App（走 8721 裸 TCP）。
+入口只有一个：**配置网页的「电视遥控」页**（从「网站登录」顶栏「＋」左边图标进，或遥控页里直接开网址），
+走 8723 的 `/remote` WebSocket，不用装 App。
 
 - **手机 = 鼠标模型**：手机只发**相对位移 + 行为**（不带屏幕坐标），电视自己维护一个光标点（`CursorView`）。
   这样不受手机屏幕比例和网页布局影响
 - **触摸注入**：电视把动作换算成光标位置的 Android `MotionEvent`，用 `webView.dispatchTouchEvent()` 打进网页——
   走系统输入管线，网页收到的是 `isTrusted=true` 的真实触摸，点击 / 双指滚动 / 长按拖拽都按真实手势处理，
   不受 CSP 影响、不怕网站校验事件可信度
-- **文字注入**：手机底部一个输入框 + 一个「替换」按钮，点替换把内容整体写进电视上聚焦的输入框
+- **文字注入**：网页底部一个输入框 + 一个「替换输入框」按钮，点替换把内容整体写进电视上聚焦的输入框
   （输入框留空点替换就是清空那个框）。
   优先走合成 IME（捕获页面 `InputConnection` 后 `commitText`），等同真实输入法；桥没建立时退回 JS
   （native value setter + `input` 事件，兼容 React/Vue 受控输入框）
-- **传输**：App 用 `RemoteServer`（端口 8721，newline 分隔 JSON，触控板 40ms 合并一次位移）；
-  网页用 `ConfigServer` 的 `/remote` WebSocket，按 rAF（≈16ms）合并发送，并用
+- **传输**：`ConfigServer` 的 `/remote` WebSocket，按 rAF（≈16ms）合并发送，并用
   `pointerrawupdate` / `getCoalescedEvents` 把两帧之间的中间点补齐。
-  网页这条路有个绕不开的限制：标签页切后台或锁屏，浏览器就冻结 JS、连接断掉（回前台自动重连），
+  这条路有个绕不开的限制：标签页切后台或锁屏，浏览器就冻结 JS、连接断掉（回前台自动重连），
   而普通 http 页面拿不到系统的屏幕常亮，所以登录时得自己保持亮屏
-- **触控板手势**（App 的 `TrackpadView` / 网页的 `#pad`）：单指滑动=移动、轻点=单击、二连点=双击、
-  长按后滑动=拖拽、双指滑动=滚轮；快捷键网页上是 Tab / 返回 / 刷新，App 另有 点击 / 双击 / 回车 / 删除
+- **触控板手势**（网页的 `#pad`）：单指滑动=移动、轻点=单击、二连点=双击、
+  长按后滑动=拖拽、双指滑动=滚轮；快捷键是 Tab / 返回 / 刷新
 
-协议（一行一个 JSON）：
+协议（一条消息一个 JSON）：
 
 | 消息 | 含义 |
 | --- | --- |
@@ -114,22 +113,22 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 
 ### 没有实体电视，怎么测
 
-模拟器当「电视」，手机 app 连电脑：模拟器的服务在 NAT 里（10.0.2.15）手机直连不到，`adb forward` 又只绑电脑 127.0.0.1，
-所以要在电脑上起一个 TCP 中继把端口开到局域网，手机填 `电脑局域网IP:8722`；
-手机用 USB 连电脑时也可以 `adb reverse tcp:8721 tcp:8721` 后填 `127.0.0.1`。真电视则手机和电视同一局域网、直接填电视 IP（默认 8721）即可。
+手机浏览器连的是电视的局域网地址，模拟器当「电视」时它在 NAT 里（10.0.2.15），
+手机直连不到；`adb forward` 又只绑电脑 127.0.0.1，所以要在电脑上起一个中继把端口开到局域网，
+手机填 `电脑局域网IP:8724`。真电视则手机和电视同一局域网、直接填电视 IP 即可。
 
 ```bash
-# 中继：把电脑 0.0.0.0:8722 转发到 adb forward 的 127.0.0.1:8721（进模拟器）
-node -e 'const n=require("net");n.createServer(u=>{const d=n.connect(8721,"127.0.0.1");u.pipe(d);d.pipe(u);u.on("error",()=>d.destroy());d.on("error",()=>u.destroy())}).listen(8722,"0.0.0.0")'
+adb forward tcp:8723 tcp:8723
+# 中继：把电脑 0.0.0.0:8724 转发到 adb forward 的 127.0.0.1:8723（进模拟器）
+node -e 'const n=require("net");n.createServer(u=>{const d=n.connect(8723,"127.0.0.1");u.pipe(d);d.pipe(u);u.on("error",()=>d.destroy());d.on("error",()=>u.destroy())}).listen(8724,"0.0.0.0")'
 ```
 
 ## 构建
 
 ```bash
-# JDK 17 + Android SDK（compileSdk/targetSdk 35；电视端 minSdk 26，手机端 minSdk 24；路径写在 local.properties）
+# JDK 17 + Android SDK（compileSdk/targetSdk 35；电视端 minSdk 26；路径写在 local.properties）
 ./gradlew assembleDebug
 # 电视端：app/build/outputs/apk/debug/app-debug.apk
-# 手机端：phone/build/outputs/apk/debug/phone-debug.apk
 ```
 
 ## 安装
@@ -160,9 +159,8 @@ app/src/main/java/com/tvlive/web/
   PairingView.kt         独立的配对浮层（二维码 + 地址 + 配对码）
   Qr.kt                  zxing 本地生成二维码 Bitmap
   Net.kt                 取本机局域网地址
-  LoginActivity.kt       登录页：可交互 WebView + 手机遥控光标 + 触摸/文字注入
+  LoginActivity.kt       登录页：可交互 WebView + 网页遥控光标 + 触摸/文字注入
   RemoteWebView.kt       捕获页面 InputConnection，供合成 IME 提交文字
-  RemoteServer.kt        手机遥控 TCP 服务（newline 分隔 JSON）
   CursorView.kt          悬浮光标点（手机=鼠标，位置即点击落点）
   BadgeIconView.kt       在播频道的声波角标动画
   EpgManager.kt          XMLTV 下载、解析、匹配、定时更新
@@ -173,9 +171,4 @@ app/src/main/res/layout/
   panel_overlay.xml      面板：左 频道信息 / 中 频道列表 / 右 手机配置二维码
   panel_info.xml         左列频道信息（状态、清晰度、频道名、EPG、剩余时间、下一档、时间；纯展示不参与焦点）
   item_panel_channel.xml 频道列表行（含在播声波角标）
-
-phone/src/main/java/com/tvlive/remote/
-  MainActivity.kt        连接页 + 触控板 + 快捷键 + 文字「替换」
-  TrackpadView.kt        触控板手势：移动 / 点击 / 长按拖拽 / 双指滚动
-  RemoteClient.kt        遥控 TCP 客户端
 ```

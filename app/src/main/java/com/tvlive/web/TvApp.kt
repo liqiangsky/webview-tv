@@ -25,6 +25,9 @@ class TvApp : Application() {
     /** 遥控指令的去向：只有登录页在前台时挂着，不在就是没人能收 */
     @Volatile var remoteSink: RemoteSink? = null
 
+    /** 网页遥控连上/断开的人数回报，同样只挂给前台登录页 */
+    @Volatile var remoteCount: ((Int) -> Unit)? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -33,6 +36,7 @@ class TvApp : Application() {
             CONFIG_PORT, this,
             hostProvider = { host },
             remoteProvider = { remoteSink },
+            remoteCount = { n -> remoteCount?.invoke(n) },
             pinProvider = { ChannelStore.pin }
         )
         config.start()
@@ -41,7 +45,7 @@ class TvApp : Application() {
     }
 
     companion object {
-        /** 配置网页端口：和遥控触控板的 8721 分开，互不影响 */
+        /** 配置网页端口：遥控指令也走这个端口的 WebSocket */
         const val CONFIG_PORT = 8723
         lateinit var instance: TvApp
             private set

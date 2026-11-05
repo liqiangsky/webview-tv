@@ -34,7 +34,7 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 /**
- * 网页登录页（手机遥控配套）：全屏可交互 WebView + 悬浮光标。
+ * 网页登录页（配置页「电视遥控」的配套）：全屏可交互 WebView + 悬浮光标。
  * 手机当鼠标：发相对位移和动作，本页把动作换算成光标位置的
  * Android MotionEvent（dispatchTouchEvent）打给 WebView —— 走系统输入管线，
  * 网页收到的是 isTrusted=true 的真实触摸，点击/滚动/长按拖拽全部按真实手势处理。
@@ -45,7 +45,7 @@ class LoginActivity : Activity() {
     private lateinit var webView: RemoteWebView
     private lateinit var cursor: CursorView
     private lateinit var statusText: TextView
-    private var server: RemoteServer? = null
+    private var remoteClients = 0
 
     private var dragging = false
     private var dragDownTime = 0L
@@ -117,20 +117,22 @@ class LoginActivity : Activity() {
         if (url != null) webView.loadUrl(url)
         Toast.makeText(this, "电视上的直播已暂停，登录完按返回键退出会自动重播当前频道", Toast.LENGTH_LONG).show()
 
-        server = RemoteServer(REMOTE_PORT, this::onCommand) { n -> updateStatus(n) }
-        server?.start()
-        // 配置网页的遥控走 8723 的 WebSocket，指令落到同一个入口；本页在前台时才有去处
-        (application as TvApp).remoteSink = remoteSink
-        updateStatus(0)
+        val app = application as TvApp
+        // 遥控指令从配置服务的 WebSocket 进来，本页在前台时才有去处
+        app.remoteSink = remoteSink
+        app.remoteCount = { n -> remoteClients = n; updateStatus() }
+        updateStatus()
     }
 
     /** 网页指令的挂出对象：销毁时要确认挂着的还是自己，别把后继登录页的注册抹掉 */
     private val remoteSink: RemoteSink = { onCommand(it) }
 
     override fun onDestroy() {
-        server?.stop()
         val app = application as TvApp
-        if (app.remoteSink === remoteSink) app.remoteSink = null
+        if (app.remoteSink === remoteSink) {
+            app.remoteSink = null
+            app.remoteCount = null
+        }
         super.onDestroy()
     }
 
@@ -382,10 +384,10 @@ class LoginActivity : Activity() {
 
     // ---------------- 杂项 ----------------
 
-    private fun updateStatus(clients: Int) {
+    private fun updateStatus() {
         val ip = localIp() ?: "未联网?"
-        statusText.text = "遥控 $ip:$REMOTE_PORT · 已连接手机 $clients" +
-            if (clients > 0) " ✔" else "（手机遥控 App 或配置网页「电视遥控」）"
+        statusText.text = "遥控 http://$ip:${TvApp.CONFIG_PORT} · 已连接手机 $remoteClients" +
+            if (remoteClients > 0) " ✔" else "（手机打开配置网页「电视遥控」）"
     }
 
     private fun localIp(): String? {
@@ -419,7 +421,6 @@ class LoginActivity : Activity() {
     private fun dp(v: Int) = (v * density).toInt()
 
     companion object {
-        const val REMOTE_PORT = 8721
         private const val MOVE_SPEED = 1.6f
         private const val SCROLL_PX = 4f
         // 保留桌面 UA，注入 viewport 把布局视口宽度设成页面真实内容宽：

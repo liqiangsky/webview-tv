@@ -12,6 +12,7 @@ import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 配置服务：电视端起一个极简 HTTP 服务器，手机浏览器扫码打开就能管频道和登录网址。
@@ -31,6 +32,7 @@ class ConfigServer(
     private val context: Context,
     private val hostProvider: () -> ConfigHost?,
     private val remoteProvider: () -> RemoteSink?,
+    private val remoteCount: (Int) -> Unit,
     private val pinProvider: () -> String
 ) {
 
@@ -43,6 +45,9 @@ class ConfigServer(
 
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var server: ServerSocket? = null
+
+    /** 在连的网页遥控数：登录页左上角那行状态字要跟着报数 */
+    private val remoteClients = AtomicInteger(0)
 
     fun start() {
         if (server != null) return
@@ -146,6 +151,8 @@ class ConfigServer(
         out.write(handshake101(key))
         out.flush()
         socket.soTimeout = REMOTE_TICK_MS
+        val n = remoteClients.incrementAndGet()
+        main.post { remoteCount(n) }
         var ready = remoteProvider() != null
         sendFrame(out, JSONObject().put("t", "ready").put("v", ready).toString())
         val msg = ByteArrayOutputStream(256)
@@ -191,6 +198,8 @@ class ConfigServer(
             msg.reset()
             if (obj != null) main.post { runCatching { remoteProvider()?.invoke(obj) } }
         }
+        val left = remoteClients.decrementAndGet()
+        main.post { remoteCount(left) }
     }
 
     /** 服务端 → 客户端一律不掩码，指令帧都小，走不到扩展长度以外 */
