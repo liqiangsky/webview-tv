@@ -215,9 +215,11 @@ class ConfigServer(
      */
     fun pushRemoteState() {
         if (remoteStreams.isEmpty()) return
-        val text = JSONObject().put("t", "z").put("v", zoomProvider()).toString()
+        val texts = listOf(
+            JSONObject().put("t", "z").put("v", zoomProvider()).toString()
+        )
         pushExec.execute {
-            remoteStreams.forEach { sendFrame(it, text) }
+            remoteStreams.forEach { s -> texts.forEach { sendFrame(s, it) } }
         }
     }
 

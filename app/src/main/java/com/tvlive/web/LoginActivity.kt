@@ -37,9 +37,9 @@ import java.net.NetworkInterface
 
 /**
  * 网页登录页（配置页「电视遥控」的配套）：全屏可交互 WebView + 悬浮光标。
- * 手机当鼠标：发相对位移和动作，本页把动作换算成光标位置的
- * Android MotionEvent（dispatchTouchEvent）打给 WebView —— 走系统输入管线，
- * 网页收到的是 isTrusted=true 的真实触摸，点击/滚动/长按拖拽全部按真实手势处理。
+ * 手机只发相对位移和动作，本页把它们换算成光标位置、鼠标源的 MotionEvent（SOURCE_MOUSE +
+ * TOOL_TYPE_MOUSE）打给 WebView，网页收到的就是 PC 鼠标那一套：悬停、单击/双击、拖拽、长按。
+ * 两处内核不给的（dblclick 的 click_count、会崩内核的 ACTION_SCROLL）由 JS 补齐。
  * 文字输入走 JS：native value setter + input 事件，兼容 React/Vue 受控输入框。
  */
 class LoginActivity : Activity() {
@@ -52,9 +52,6 @@ class LoginActivity : Activity() {
 
     /** 页面缩放百分比：电视上的缩放按钮和手机遥控页共用这一份档位 */
     private var zoom = ZOOM_STEP_BASE
-
-    /** 铺满这一屏需要的布局视口宽（CSS px），在 1× 下量的 */
-    private var fitBasisPx = 0
 
     private var dragging = false
     private var dragDownTime = 0L
@@ -85,20 +82,15 @@ class LoginActivity : Activity() {
                     return !(url.startsWith("http://") || url.startsWith("https://"))
                 }
 
-                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                    // 新文档：宽度基准要重新量
-                    fitBasisPx = 0
-                }
-
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    // 页面加载完成后量内容宽并设 viewport；延迟补跑几次，
-                    // 覆盖异步撑开宽度的情况（字体/图片/懒加载布局稳定后宽度才准）
+                    // 每个新文档都要重铺一遍：旧文档的行内样式不在新文档上，
+                    // 缩放档位和 viewport 都得重新打上去
                     fun fit() {
-                        refit(measureFirst = true)
-                        applyZoom()   // 新文档没有旧文档的行内样式，档位要重新打上去
+                        setViewportWidth()
+                        applyZoom()
                     }
                     fit()
-                    main.postDelayed({ fit() }, 400)
+                    // 有些页面加载后才用 JS 改自己的 viewport meta，补跑一次按屏幕宽盖回去
                     main.postDelayed({ fit() }, 1200)
                 }
             }
@@ -124,7 +116,7 @@ class LoginActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.START).apply { setMargins(dp(12), dp(12), 0, 0) })
 
-        // 缩放按钮：原生视图钉在左下角，页面怎么重排都跟它无关
+        // 钉在左下角的原生条：缩放三档 + 关闭，页面怎么重排都跟它无关
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -133,6 +125,8 @@ class LoginActivity : Activity() {
             addView(zoomCell("－") { stepZoom(-1) })
             addView(zoomCell("1×") { setZoom(ZOOM_STEP_BASE) })
             addView(zoomCell("＋") { stepZoom(1) })
+            // 电视遥控器上 Back 也能退，但触屏观众要找返回键很费劲
+            addView(zoomCell("关闭") { finish() })
         }
         root.addView(bar, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -144,7 +138,7 @@ class LoginActivity : Activity() {
 
         val url = intent.getStringExtra("url")
         if (url != null) webView.loadUrl(url)
-        Toast.makeText(this, "电视上的直播已暂停，登录完按返回键退出会自动重播当前频道", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "电视上的直播已暂停，登录完按「关闭」或返回键退出，会自动重播当前频道", Toast.LENGTH_LONG).show()
 
         val app = application as TvApp
         // 遥控指令从配置服务的 WebSocket 进来，本页在前台时才有去处
@@ -217,7 +211,7 @@ class LoginActivity : Activity() {
                 if (dragging) moveDrag(dx, dy) else moveCursor(dx, dy)
             }
             "c" -> tap()
-            "dc" -> { tap(); main.postDelayed({ tap() }, 90) }
+            "dc" -> doubleTap()
             "ds" -> startDrag()
             "de" -> endDrag()
             "s" -> scroll(cmd.optDouble("dx", 0.0).toFloat(), cmd.optDouble("dy", 0.0).toFloat())
@@ -237,130 +231,121 @@ class LoginActivity : Activity() {
                 "esc" -> pressKey(KeyEvent.KEYCODE_ESCAPE)
                 "back" -> if (webView.canGoBack()) webView.goBack() else finish()
                 "refresh" -> webView.reload()
+                "close" -> finish()        // 手机遥控页的「关闭登录页」：不退网页，直接收掉这一页
             }
         }
     }
 
-    // ---------------- 触摸注入 ----------------
+    // ---------------- 指针注入（PC 鼠标语义） ----------------
 
+    /** 一次点击 = 左键按下 + 50ms 后抬起，downTime 相同 */
     private fun tap() {
         val x = cursor.curX()
         val y = cursor.curY()
         val t = SystemClock.uptimeMillis()
-        dispatch(MotionEvent.ACTION_DOWN, x, y, t, t)
+        mouseButton(MotionEvent.ACTION_BUTTON_PRESS, x, y, t, t)
         main.postDelayed({
-            dispatch(MotionEvent.ACTION_UP, x, y, t, SystemClock.uptimeMillis())
+            mouseButton(MotionEvent.ACTION_BUTTON_RELEASE, x, y, t, SystemClock.uptimeMillis())
         }, 50)
+    }
+
+    /**
+     * 双击：两对按键落在同一个双击窗口里。
+     * 内核只给真外设算 click_count，合成事件到不了 dblclick，所以第二对之后
+     * 再往光标下的元素补发一次 dblclick（非可信，但监听器照常触发）。
+     */
+    private fun doubleTap() {
+        tap()
+        main.postDelayed({
+            tap()
+            main.postDelayed({ dispatchDblClick() }, 120)
+        }, 110)
+    }
+
+    private fun dispatchDblClick() {
+        webView.evaluateJavascript(
+            "(function(){" + pointJs() +
+                "var el=document.elementFromPoint(x,y);" +
+                "if(el)el.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true," +
+                "clientX:x,clientY:y,button:0,buttons:1}));})()", null)
     }
 
     private fun startDrag() {
         dragging = true
         dragDownTime = SystemClock.uptimeMillis()
-        dispatch(MotionEvent.ACTION_DOWN, cursor.curX(), cursor.curY(), dragDownTime, dragDownTime)
+        mouseButton(MotionEvent.ACTION_BUTTON_PRESS, cursor.curX(), cursor.curY(),
+            dragDownTime, dragDownTime)
     }
 
     private fun moveDrag(dx: Float, dy: Float) {
-        moveCursor(dx, dy)
-        dispatch(MotionEvent.ACTION_MOVE, cursor.curX(), cursor.curY(),
-            dragDownTime, SystemClock.uptimeMillis())
+        cursor.moveBy(dx, dy)
+        val t = SystemClock.uptimeMillis()
+        // 按住左键挪位置 = ACTION_MOVE + BUTTON_PRIMARY，页面收到 buttons=1 的 mousemove
+        dispatchMouse(mouseEvent(MotionEvent.ACTION_MOVE, cursor.curX(), cursor.curY(),
+            dragDownTime, t, MotionEvent.BUTTON_PRIMARY))
     }
 
     private fun endDrag() {
         if (!dragging) return
         dragging = false
-        dispatch(MotionEvent.ACTION_UP, cursor.curX(), cursor.curY(),
+        mouseButton(MotionEvent.ACTION_BUTTON_RELEASE, cursor.curX(), cursor.curY(),
             dragDownTime, SystemClock.uptimeMillis())
     }
 
-    private fun dispatch(action: Int, x: Float, y: Float, downTime: Long, eventTime: Long) {
-        val ev = MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
-        // 打给整棵树而不是直接给 WebView：左下角的缩放按钮也在这层，落上去就该归它
-        root.dispatchTouchEvent(ev)
+    private fun mouseEvent(
+        action: Int, x: Float, y: Float, downTime: Long, eventTime: Long, buttonState: Int
+    ): MotionEvent = MotionEvent.obtain(downTime, eventTime, action, 1,
+        arrayOf(MotionEvent.PointerProperties().apply {
+            id = 0
+            toolType = MotionEvent.TOOL_TYPE_MOUSE
+        }),
+        arrayOf(MotionEvent.PointerCoords().apply { this.x = x; this.y = y }),
+        0, buttonState, 1f, 1f, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0,
+        InputDevice.SOURCE_MOUSE)
+
+    /**
+     * 鼠标源的按键和悬停都交给 WebView.dispatchTouchEvent：
+     * 内核按 source=SOURCE_MOUSE 自己分流，合成出可信的 mousedown/mouseup/click/mousemove。
+     * 走 dispatchGenericMotionEvent 会被 View 层按焦点拦下（实测返回 false，页面一个事件都收不到）。
+     */
+    private fun dispatchMouse(ev: MotionEvent) {
+        webView.dispatchTouchEvent(ev)
         ev.recycle()
     }
 
+    /** 按下和抬起都带上 BUTTON_PRIMARY：内核靠它认出是哪一个键在按/在收 */
+    private fun mouseButton(action: Int, x: Float, y: Float, downTime: Long, eventTime: Long) {
+        dispatchMouse(mouseEvent(action, x, y, downTime, eventTime, MotionEvent.BUTTON_PRIMARY))
+    }
+
+    /** 没按键的移动 = 悬停：ACTION_HOVER_MOVE 驱动页面的 :hover 和 mousemove */
+    private fun hover() {
+        val t = SystemClock.uptimeMillis()
+        dispatchMouse(mouseEvent(MotionEvent.ACTION_HOVER_MOVE, cursor.curX(), cursor.curY(), t, t, 0))
+    }
+
     /**
-     * 滚动 = 虚拟双指触控拖拽：Chromium 不认合成的 ACTION_SCROLL 滚轮事件，
-     * 但双指 DOWN→MOVE→UP 的触控序列会被手势识别器转成页面滚动。
-     * 连续滚动指令共用一个手势，250ms 没有新指令才抬手。
+     * 滚轮 = 滚光标下的容器：先给页面一个 wheel 事件，再改 scrollTop/scrollLeft。
+     * 不走 ACTION_SCROLL：把带轴向值的滚轮事件打给 WebView，libwebviewchromium 直接 SIGTRAP
+     * 把整个应用带走（实测 140 号 WebView 在两台机器上都崩）。
      */
-    private var scrollDownTime = 0L
-    private var scrollFingerX = 0f
-    private var scrollFingerY = 0f
-    private var scrollActive = false
-    private var scrollHorizontal = false
-    private var scrollAccumPx = 0f
-    private var scrollAccumXpx = 0f
-    private var scrollStartTop = -1f
-    private var scrollStartLeft = -1f
-    private val endScroll = Runnable {
-        if (scrollActive) sendScrollPointer(MotionEvent.ACTION_UP)
-        finishScrollGesture()
-    }
-
     private fun scroll(dx: Float, dy: Float) {
-        val dxPx = dx * density * SCROLL_PX
-        val dyPx = dy * density * SCROLL_PX
-        if (!scrollActive) {
-            scrollActive = true
-            scrollHorizontal = kotlin.math.abs(dxPx) > kotlin.math.abs(dyPx)
-            scrollAccumPx = 0f
-            scrollAccumXpx = 0f
-            scrollDownTime = SystemClock.uptimeMillis()
-            scrollFingerX = cursor.curX()
-            scrollFingerY = cursor.curY()
-            sendScrollPointer(MotionEvent.ACTION_DOWN)
-            queryScrollPos { top, left -> scrollStartTop = top ?: -1f; scrollStartLeft = left ?: -1f }
-        }
-        scrollAccumPx += dyPx
-        scrollAccumXpx += dxPx
-        if (scrollHorizontal) {
-            // 手指右移 = 视窗右移 = scrollLeft 增大
-            scrollFingerX = (scrollFingerX + dxPx)
-                .coerceIn(20f, (webView.width - 20).toFloat())
-        } else {
-            // 手机双指上滑（dy>0）= 页面向下滚 = 虚拟手指上移
-            scrollFingerY = (scrollFingerY - dyPx)
-                .coerceIn(20f, (webView.height - 20).toFloat())
-        }
-        sendScrollPointer(MotionEvent.ACTION_MOVE)
-        main.removeCallbacks(endScroll)
-        main.postDelayed(endScroll, 250)
+        scrollViaJs(dx * density * SCROLL_PX, dy * density * SCROLL_PX)
     }
 
-    /** 触控手势没滚动页面（PC 布局常只听滚轮）时，退回 JS 滚光标下方的滚动容器 */
-    private fun finishScrollGesture() {
-        val accumY = scrollAccumPx
-        val accumX = scrollAccumXpx
-        val start = scrollStartTop
-        val startL = scrollStartLeft
-        scrollAccumPx = 0f
-        scrollAccumXpx = 0f
-        scrollStartTop = -1f
-        scrollStartLeft = -1f
-        if ((accumY == 0f && accumX == 0f) || (start < 0f && startL < 0f)) return
-        queryScrollPos { now, nowL ->
-            val sameY = now != null && kotlin.math.abs(now - start) < 1f
-            val sameX = nowL != null && kotlin.math.abs(nowL - startL) < 1f
-            if (scrollHorizontal) {
-                if (sameX && accumX != 0f) scrollViaJs(accumX, 0f)
-            } else if (sameY && accumY != 0f) {
-                scrollViaJs(0f, accumY)
-            }
-        }
-    }
+    /** 视图像素 → CSS 像素的换算：页面用 viewport 宽铺满整屏，比例就是 1/视图宽 */
+    private fun toCss(px: Float, viewSize: Int): String =
+        (if (viewSize > 0) px.toDouble() / viewSize else 0.0).toString()
 
-    private fun queryScrollPos(cb: (Float?, Float?) -> Unit) {
-        webView.evaluateJavascript(
-            "(function(){var el=document.scrollingElement||document.documentElement;return JSON.stringify([el.scrollTop,el.scrollLeft]);})()"
-        ) { v ->
-            val arr = try { org.json.JSONArray(v?.trim('"')?.replace("\\\"", "\"") ?: "[]") } catch (e: Exception) { null }
-            cb(arr?.optDouble(0)?.toFloat(), arr?.optDouble(1)?.toFloat())
-        }
-    }
+    /** 光标坐标是视图像素，页面按 CSS 像素排布，进 JS 前先按可视区比例换算 */
+    private fun pointJs(): String =
+        "var x=" + toCss(cursor.curX(), webView.width) + "*innerWidth," +
+            "y=" + toCss(cursor.curY(), webView.height) + "*innerHeight;"
 
+    /** 补滚的位移同样要换算成 CSS 像素：dxPx/dyPx 是视图像素 */
     private fun scrollViaJs(dxPx: Float, dyPx: Float) {
-        val js = "(function(){var x=" + cursor.curX() + ",y=" + cursor.curY() + ",dx=" + dxPx + ",dy=" + dyPx + ";" +
+        val js = "(function(){" + pointJs() +
+            "var dx=" + toCss(dxPx, webView.width) + "*innerWidth,dy=" + toCss(dyPx, webView.width) + "*innerWidth;" +
             "var el=document.elementFromPoint(x,y);" +
             "while(el&&el!==document.body&&el!==document.documentElement){" +
             "var s=getComputedStyle(el);" +
@@ -372,35 +357,6 @@ class LoginActivity : Activity() {
             "el.dispatchEvent(new WheelEvent('wheel',{deltaX:dx,deltaY:dy,clientX:x,clientY:y,bubbles:true}));" +
             "el.scrollTop+=dy;el.scrollLeft+=dx;})()"
         webView.evaluateJavascript(js, null)
-    }
-
-    private fun sendScrollPointer(action: Int) {
-        val t = SystemClock.uptimeMillis()
-        scrollActive = action != MotionEvent.ACTION_UP
-        val props = arrayOf(
-            MotionEvent.PointerProperties().apply {
-                id = 0
-                toolType = MotionEvent.TOOL_TYPE_FINGER
-            },
-            MotionEvent.PointerProperties().apply {
-                id = 1
-                toolType = MotionEvent.TOOL_TYPE_FINGER
-            }
-        )
-        val coords = arrayOf(
-            MotionEvent.PointerCoords().apply {
-                x = scrollFingerX
-                y = if (scrollHorizontal) scrollFingerY - 30f else scrollFingerY
-            },
-            MotionEvent.PointerCoords().apply {
-                x = scrollFingerX
-                y = if (scrollHorizontal) scrollFingerY + 30f else scrollFingerY + 60f
-            }
-        )
-        val ev = MotionEvent.obtain(scrollDownTime, t, action, 2, props, coords,
-            0, 0, 1f, 1f, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_TOUCHSCREEN)
-        webView.dispatchTouchEvent(ev)
-        ev.recycle()
     }
 
     private fun pressKey(code: Int) {
@@ -469,45 +425,26 @@ class LoginActivity : Activity() {
         app.config.pushRemoteState()
     }
 
-    /** 缩放就是往 html 上打 CSS zoom，视口、布局基准都不动 */
+    /** 缩放就是往 body 上打 CSS zoom，视口、布局基准都不动 */
     private fun applyZoom() {
         webView.evaluateJavascript(
             APPLY_ZOOM_JS.replace("__Z__", zoom.toString()), null
         )
     }
 
-    /** 光标挪了只挪光标：页面超出可见区的部分靠滚动指令挪过去 */
+    /** 光标挪了只挪光标：没按住时同步发悬停，页面的 :hover 要跟着走 */
     private fun moveCursor(dx: Float, dy: Float) {
         cursor.moveBy(dx, dy)
+        if (!dragging) hover()
     }
 
-    /** 量 1× 下铺满这屏需要的布局视口宽，再交给 setViewportWidth */
-    private fun refit(measureFirst: Boolean) {
-        if (measureFirst || fitBasisPx <= 0) {
-            webView.evaluateJavascript(MEASURE_WIDTH_JS) { value ->
-                val arr = try {
-                    org.json.JSONArray(value?.trim('"')?.replace("\\\"", "\"") ?: "[]")
-                } catch (_: Exception) {
-                    null
-                }
-                val vw = arr?.optInt(0) ?: return@evaluateJavascript
-                val content = arr.optInt(1)
-                if (vw > 0) {
-                    fitBasisPx = if (content > vw) content else vw
-                    setViewportWidth()
-                }
-            }
-        } else {
-            setViewportWidth()
-        }
-    }
-
-    /** viewport 只负责「铺满这屏」，缩放不掺和进去 */
+    /** 布局视口宽交给 viewport meta：不掺和缩放 */
     private fun setViewportWidth() {
-        if (fitBasisPx <= 0) return
-        webView.evaluateJavascript(
-            SET_VIEWPORT_JS.replace("__W__", fitBasisPx.toString()), null
-        )
+        // 布局视口就按 WebView 自己的宽铺：页面排版和 PC 浏览器同宽，
+        // CSS zoom 才是整体放大，而不是先把内容挤进一个猜出来的窄栏
+        val cssPx = (webView.width / resources.displayMetrics.density).toInt()
+        if (cssPx <= 0) return
+        webView.evaluateJavascript(SET_VIEWPORT_JS.replace("__W__", cssPx.toString()), null)
     }
 
     private fun roundPlate(cornerPx: Int) = GradientDrawable().apply {
@@ -579,27 +516,17 @@ class LoginActivity : Activity() {
         // 下限凑满整档：否则从 30% 再减一档会被夹成 25%，读数反倒涨回去
         private const val ZOOM_MIN = 30
         private const val ZOOM_MAX = 400
-        // 保留桌面 UA，注入 viewport 把布局视口宽度设成页面真实内容宽：
-        // 内核据此整体等比缩放铺满 WebView 宽度 → 横向不滚动，弹窗也随缩放变矮可点关闭
-        private val MEASURE_WIDTH_JS = """
-            (function () {
-              var d = document.documentElement, b = document.body;
-              var vw = d.clientWidth || window.innerWidth;
-              var cw = Math.max(
-                d.scrollWidth, d.offsetWidth,
-                b ? b.scrollWidth : 0, b ? b.offsetWidth : 0);
-              return JSON.stringify([vw, cw]);
-            })();
-        """
 
         // 1× 时把样式清掉而不是写 1：有些页面自己按设计稿给根节点设了 zoom
         private val APPLY_ZOOM_JS = """
             (function () {
               var c = __Z__ / 100;
-              document.documentElement.style.zoom = c === 1 ? '' : c;
+              var el = document.body || document.documentElement;
+              el.style.zoom = c === 1 ? '' : c;
             })();
         """
 
+        // 注入 viewport 把布局视口宽设成 WebView 的 CSS 宽（屏幕 dp 宽），1× 时网页正好铺满、不横向滚
         private val SET_VIEWPORT_JS = """
             (function () {
               var d = document.documentElement;

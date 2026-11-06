@@ -88,8 +88,9 @@
   .find .n { position: absolute; right: 32px; top: 50%; transform: translateY(-50%);
     font-size: 12px; color: var(--dim); }
   /* 卡片外的小标题（首页、表单用） */
-  .sec { display: flex; align-items: center; gap: 7px; margin: 22px 6px 6px;
+  .sec { display: flex; align-items: center; gap: 7px; margin: 20px 6px 6px;
     font-size: 13px; color: var(--dim); }
+  .pmain > .sec:first-child { margin-top: 12px; }
   .sec b { color: var(--dim2); font-weight: 600; font-size: 13px; }
   .sec .sp { flex: 1; }
   .cnt { color: var(--dim); font-size: 13px; }
@@ -169,7 +170,7 @@
   textarea:focus { outline: none; }
   .hint { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 10px 6px 0; }
   /* 快捷选项：点一下就用，遥控键和导入模式这类二选一 */
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 6px 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 6px 0; }
   .chip { background: var(--fill); border: 0; color: var(--dim2); border-radius: 980px;
     padding: 6px 13px; font-size: 14px; font-family: inherit; transition: all .15s; }
   .chip.on { background: var(--accent); color: #fff; font-weight: 600; }
@@ -208,9 +209,26 @@
   #toast.bad { background: rgba(255,69,58,.96); }
   .pinrow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
   .pinrow b { color: var(--fg); font-size: 15px; letter-spacing: .14em; font-weight: 600; }
+  /* 遥控页的省地方三件套：连接状态挂顶栏、能贴标题行的控件不另起一排、输入框和主操作同行 */
+  .rcst { display: flex; align-items: center; gap: 6px; flex: none; margin-right: 2px;
+    font-size: 12px; color: var(--dim); }
+  .rcst i { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none;
+    transition: background .2s; }
+  .rcst i.ok { background: #34c759; }
+  .rcst i.wait { background: #ff9f0a; }
+  .rcst i.bad { background: var(--danger); }
+  .sec .mini { padding: 4px 11px; font-size: 12px; }
+  .chip.key.sq { min-width: 34px; padding: 4px 8px; font-size: 16px; line-height: 1.4; }
+  .inrow { display: flex; align-items: center; gap: 8px; margin: 10px 6px 0; }
+  .inrow input { flex: 1; min-width: 0; background: var(--card); border: 0; border-radius: 10px;
+    padding: 10px 12px; font-size: 15px; color: var(--fg); box-shadow: inset 0 0 0 1px var(--sep); }
+  .inrow input:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .inrow .go { flex: none; background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+    padding: 10px 15px; font-size: 15px; font-family: inherit; font-weight: 600; }
+  .inrow .go:active { transform: scale(.96); opacity: .75; }
   /* 电视遥控：触控板是一块圆角卡片。touch-action:none 只加在这一块上，
      否则浏览器先抢手势（滚动、双指缩放），累积到的位移就是断断续续的，光标跟不住手指 */
-  .pad { position: relative; height: 46vh; min-height: 230px; margin-top: 16px;
+  .pad { position: relative; height: 56vh; min-height: 300px; margin-top: 10px;
     background: var(--card); border-radius: 14px; overflow: hidden;
     box-shadow: inset 0 0 0 1px var(--sep);
     touch-action: none; -webkit-user-select: none; user-select: none; }
@@ -229,6 +247,7 @@
   .chip.key { min-width: 66px; text-align: center; padding: 9px 13px; font-size: 15px;
     background: var(--card); color: var(--fg); box-shadow: inset 0 0 0 1px var(--sep); }
   .chip.key:active { transform: scale(.96); opacity: .5; }
+  .chip.key.on { background: var(--accent); color: #fff; font-weight: 600; }
   .st { align-items: center; }
   .st i { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none;
     transition: background .2s; }
@@ -305,7 +324,7 @@
   <div class="pmain">
     <div class="group" id="loginList"></div>
     <div class="hint">点条目右侧「打开」，电视会全屏打开这个网址并等手机遥控——点按钮、输账号密码
-      用「电视遥控」页的触控板。登录完按返回退出，电视会自动重播刚才那个台。<br>
+      用「电视遥控」页的触控板。登录完按电视左下角「关闭」（或返回键）退出，电视会自动重播刚才那个台。<br>
       点条目本身可以改名称或地址。</div>
   </div>
 </div>
@@ -314,36 +333,28 @@
   <div class="navbar">
     <span class="side"><button class="back" data-back>返回</button></span>
     <h2>电视遥控</h2>
-    <span class="side r"><button class="lnk sm" id="rcRe">重连</button></span>
+    <span class="side r"><span class="rcst"><i id="rcDot"></i><span id="rcState">未连接</span></span>
+      <button class="lnk sm" id="rcRe">重连</button></span>
   </div>
   <div class="pmain">
-    <div class="group">
-      <div class="row noact st"><i id="rcDot"></i>
-        <div class="txt"><div class="nm" id="rcState">未连接</div></div></div>
-    </div>
-    <div class="sec"><b>网页操作</b></div>
+    <div class="sec"><b>网页操作</b><span class="sp"></span>
+      <button class="chip mini" id="padScroll">单指滚动</button></div>
     <div class="pad" id="pad"><span class="dot" id="padDot"></span>
-      <span class="tip" id="padTip">单指移动 · 轻点单击 · 二连点双击 · 长按拖动 · 双指滚动</span>
+      <span class="tip" id="padTip">单指移动=悬停 · 轻点单击 · 二连点双击 · 长按按住拖拽 · 双指滚轮</span>
       <span class="off" id="padOff" hidden>电视当前不在登录页</span></div>
     <div class="chips">
-      <button class="chip key" data-rk="back">返回上一页</button>
-      <button class="chip key" data-rk="refresh">刷新页面</button>
+      <button class="chip key" data-rk="back">返回</button>
+      <button class="chip key" data-rk="refresh">刷新</button>
+      <button class="chip key" data-rk="close">关闭登录页</button>
+      <button class="chip key" data-rk="tab">Tab</button>
     </div>
-    <div class="sec"><b>缩放</b><span class="sp"></span><span class="cnt" id="rcZoom">100%</span></div>
-    <div class="chips">
-      <button class="chip key" data-zk="-1">－</button>
-      <button class="chip key" data-zk="0">1×</button>
-      <button class="chip key" data-zk="1">＋</button>
-    </div>
+    <div class="sec"><b>缩放</b><span class="sp"></span><span class="cnt" id="rcZoom">100%</span>
+      <button class="chip key sq" data-zk="-1">－</button>
+      <button class="chip key sq" data-zk="0">1×</button>
+      <button class="chip key sq" data-zk="1">＋</button></div>
     <div class="sec"><b>输入框</b></div>
-    <div class="group">
-      <div class="frow"><label>文字</label>
-        <input id="rcText" placeholder="留空就是清空电视上的输入框"></div>
-    </div>
-    <button class="act-full pri" id="rcSend">替换输入框</button>
-    <div class="chips">
-      <button class="chip key" data-rk="tab">下一个框</button>
-    </div>
+    <div class="inrow"><input id="rcText" placeholder="写内容，留空即清空">
+      <button class="go" id="rcSend">替换</button></div>
   </div>
 </div>
 
@@ -706,7 +717,15 @@
     } else if (d.page != null) {
       show($('p-' + d.page));
     } else if (d.rk != null) {
-      remoteKey(d.rk);
+      if (d.rk === 'close') {
+        if (!wsLive) { toast('还没连上电视', true); return; }
+        wsSend({ t: 'k', k: 'close' });
+        // 电视收了登录页，手机这边退回「网站登录」；长连接留着只会显示个假在线
+        closeWs();
+        show($('p-login'));
+        hide($('p-remote'));
+        toast('已关闭电视上的登录页');
+      } else remoteKey(d.rk);
     } else if (d.zk != null) {
       remoteZoom(+d.zk);
     } else if (d.play != null) {
@@ -963,6 +982,11 @@
   var moved = false, dragging = false, multi = false, mid = null;
   var pendX = 0, pendY = 0, raf = 0, lastUp = 0, holdTimer = 0;
   var dotX = 0, dotY = 0, dotOn = false;
+  // 单指滑动的两种用途：关掉是鼠标悬停，打开是滚轮。双指始终是滚轮，长按拖拽只有关掉才有。
+  var scrollMode = false;
+  try { scrollMode = localStorage.getItem('padScroll') === '1'; } catch (e) {}
+  var TIP_MOUSE = '单指移动=悬停 · 轻点单击 · 二连点双击 · 长按按住拖拽 · 双指滚轮';
+  var TIP_SCROLL = '单指滚动 · 轻点单击 · 二连点双击 · 拖拽请关掉本档';
 
   function wsSend(o) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(o));
@@ -1011,20 +1035,26 @@
     $('padOff').hidden = !off;
     $('padOff').textContent = wsLive ? '电视当前不在登录页' : '未连接电视';
     $('padTip').hidden = off;
-    $('rcState').textContent = !wsLive ? (pin() ? '没连上电视' : '还没配对')
-      : (!tvReady ? '已连接，等电视进登录页' : '已就绪');
+    $('padTip').textContent = scrollMode ? TIP_SCROLL : TIP_MOUSE;
+    $('padScroll').classList.toggle('on', scrollMode);
+    $('rcState').textContent = !wsLive ? (pin() ? '没连上' : '没配对')
+      : (!tvReady ? '等登录页' : '已就绪');
   }
 
   function flushMove() {
     raf = 0;
     if (!pendX && !pendY) return;
-    wsSend({ t: 'm', dx: pendX, dy: pendY });
+    // 滚动档：dy 取反，手指上滑 = 页面向下滚，跟双指那条一致
+    if (scrollMode) wsSend({ t: 's', dx: pendX * SCROLL_STEP, dy: -pendY * SCROLL_STEP });
+    else wsSend({ t: 'm', dx: pendX, dy: pendY });
     pendX = 0; pendY = 0;
   }
 
   function accumulate(dx, dy) {
     pendX += dx; pendY += dy;
     if (!raf) raf = requestAnimationFrame(flushMove);
+    // 滚动档下本地光标点不动：它代表的是鼠标光标，滚轮没有光标这回事
+    if (scrollMode) return;
     var r = pad.getBoundingClientRect();
     dotX = Math.max(6, Math.min(r.width - 6, dotX + dx));
     dotY = Math.max(6, Math.min(r.height - 6, dotY + dy));
@@ -1051,7 +1081,8 @@
       downT = Date.now();
       moved = false; multi = false;
       clearTimeout(holdTimer);
-      holdTimer = setTimeout(function () {
+      // 滚动档下不起长按：单指按住已经在滚了，要拖拽就关掉这一档
+      if (!scrollMode) holdTimer = setTimeout(function () {
         if (moved || multi || nPts !== 1) return;
         dragging = true;
         pad.classList.add('drag');
@@ -1154,6 +1185,12 @@
     toast(s ? '已替换电视上聚焦的输入框' : '已清空电视上聚焦的输入框');
   };
   $('rcRe').onclick = function () { closeWs(); openWs(); };
+  $('padScroll').onclick = function () {
+    scrollMode = !scrollMode;
+    try { localStorage.setItem('padScroll', scrollMode ? '1' : '0'); } catch (e) {}
+    renderRemote();
+    toast(scrollMode ? '单指滑动改为滚动' : '单指滑动改回鼠标移动');
+  };
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible' && padOpen && !ws) openWs();
   });

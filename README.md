@@ -85,9 +85,14 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 
 - **手机 = 鼠标模型**：手机只发**相对位移 + 行为**（不带屏幕坐标），电视自己维护一个光标点（`CursorView`）。
   这样不受手机屏幕比例和网页布局影响
-- **触摸注入**：电视把动作换算成光标位置的 Android `MotionEvent`，用 `webView.dispatchTouchEvent()` 打进网页——
-  走系统输入管线，网页收到的是 `isTrusted=true` 的真实触摸，点击 / 双指滚动 / 长按拖拽都按真实手势处理，
-  不受 CSP 影响、不怕网站校验事件可信度
+- **鼠标注入**：电视发 `SOURCE_MOUSE` + `TOOL_TYPE_MOUSE` 的 `MotionEvent`，用 `webView.dispatchTouchEvent()` 打进网页，
+  内核按鼠标源自己合成可信的鼠标事件链 —— 移动=`ACTION_HOVER_MOVE`（页面 `:hover`、`mousemove` 照常），
+  单击=`ACTION_BUTTON_PRESS`/`RELEASE`（`mousedown`→`mouseup`→`click`），
+  拖拽=按住左键的 `ACTION_MOVE`（`mousemove` 带 `buttons=1`，能选字），长按就是按住不放再挪动。
+  设备本身支持触摸也不用再开一条路：手指直接点屏幕走的是系统自己的输入管线，一样是可信事件。
+  两处内核不给的地方：双击的 `click_count` 只认真外设，第二对按键之后往光标下的元素补发一次
+  `dblclick`（`isTrusted=false`，监听器照常）；`ACTION_SCROLL` 更会把 webview 内核直接撞崩（SIGTRAP），
+  所以滚轮不发原生事件，改成给光标下的滚动容器发 `wheel` + 改 `scrollTop`
 - **文字注入**：网页底部一个输入框 + 一个「替换输入框」按钮，点替换把内容整体写进电视上聚焦的输入框
   （输入框留空点替换就是清空那个框）。
   优先走合成 IME（捕获页面 `InputConnection` 后 `commitText`），等同真实输入法；桥没建立时退回 JS
@@ -96,11 +101,17 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
   `pointerrawupdate` / `getCoalescedEvents` 把两帧之间的中间点补齐。
   这条路有个绕不开的限制：标签页切后台或锁屏，浏览器就冻结 JS、连接断掉（回前台自动重连），
   而普通 http 页面拿不到系统的屏幕常亮，所以登录时得自己保持亮屏
-- **触控板手势**（网页的 `#pad`）：单指滑动=移动、轻点=单击、二连点=双击、
-  长按后滑动=拖拽、双指滑动=滚轮；快捷键是 Tab / 返回 / 刷新
-- **页面缩放**：网页的「缩放」行和电视上登录页的 `－ / 1× / ＋` 共用同一套档位——手机只发方向，
-  电视算步进（一档 ±0.1，30%~400%），做法是往 `documentElement` 打 CSS `zoom`；
-  档位由电视回推，两边的读数不会各算各的
+- **触控板手势**（网页的 `#pad`）：轻点=单击、二连点=双击、双指滑动=滚轮，
+  单指滑动看「单指滚动」开关——关掉是鼠标移动（配合长按=按住拖拽），打开是滚轮（此时长按不起拖拽）。
+  开关存在手机本地，刷新页面还在。快捷键是 Tab / 返回 / 刷新 / 关闭登录页
+- **遥控页的排布**：连接状态（一个点 + 两三个字）挂在顶栏，「单指滚动」贴在「网页操作」标题右边，
+  缩放读数与 `－ / 1× / ＋`、输入框与「替换」各占一行，省下的竖向空间全给触控板（`56vh`，最少 300px）
+- **页面缩放与关闭**：网页的「缩放」行和电视上登录页左下角的 `－ / 1× / ＋` 共用同一套档位——手机只发方向，
+  电视算步进（一档 ±0.1，30%~400%），做法是往 `body` 打 CSS `zoom`；
+  布局视口注入成 WebView 自己的宽（`<meta name="viewport" content="width=屏幕 dp 宽">`），
+  页面按屏幕宽排版，zoom 上去就是桌面浏览器整页放大的效果（px / vw / fixed 一起乘倍数）；
+  档位由电视回推，两边的读数不会各算各的。同一排还有个「关闭」，点了等价于按返回键退出登录页；
+  手机遥控页上也有「关闭登录页」，除了收掉电视那一页，手机自己退回「网站登录」
 
 协议（一条消息一个 JSON）：
 
@@ -111,7 +122,7 @@ adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
 | `{"t":"ds"}` … `{"t":"de"}` | 拖拽开始 / 结束（期间用 `m` 移动） |
 | `{"t":"s","dx":..,"dy":..}` | 滚轮 |
 | `{"t":"txt","s":"..","r":true}` | 文字，`r` 是否整体替换 |
-| `{"t":"k","k":"enter\|tab\|del\|esc\|back\|refresh"}` | 按键 |
+| `{"t":"k","k":"enter\|tab\|del\|esc\|back\|refresh\|close"}` | 按键，`close` 直接收掉登录页 |
 | `{"t":"nav","u":"https://.."}` | 登录页跳转地址 |
 | `{"t":"z","d":-1\|0\|1}` | 缩放：减一档 / 回 1× / 加一档 |
 | `{"t":"z","v":100}` | 电视回推的当前档位（百分比），连上和每次改动都推 |
