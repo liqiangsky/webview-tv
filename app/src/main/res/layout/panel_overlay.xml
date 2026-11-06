@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  操作面板（tvOS 语言）：一屏三列，左 频道信息 / 中 频道列表 / 右 手机配置二维码。
+  操作面板（tvOS 语言）：一个大容器里三段，左 频道信息 / 中 频道列表 / 右 手机配置二维码，
+  段与段之间一条 1dp 细线，不再各留一块卡片间距——窄屏上这点间距就是少掉的两三个字。
   键位与最初设计一致：上下选台、左右换组、OK 切台并收起。
   网站登录不在电视上展示——手机配置页里点条目的「打开」，电视直接开该站登录页。
-  整块背景压暗，让底层画面透出来；卡片用 panel_card 的深灰弱描边。
+  整块背景压暗，让底层画面透出来；容器用 panel_card 的深灰弱描边。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/panelRoot"
@@ -17,38 +18,44 @@
         android:id="@+id/panelBody"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="12dp"
-        android:layout_marginEnd="24dp"
-        android:layout_marginBottom="12dp">
+        android:layout_marginStart="18dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="18dp"
+        android:layout_marginBottom="10dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:background="@drawable/panel_card"
             android:baselineAligned="false"
             android:orientation="horizontal">
 
-            <!-- 左：频道信息 -->
+            <!-- 左：频道信息（自己的底色去掉，容器给；内边距留成段的呼吸） -->
             <include
                 layout="@layout/panel_info"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="33" />
+                android:layout_weight="32" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="#14FFFFFF" />
 
             <!-- 中：频道列表（键位主角） -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_marginStart="14dp"
-                android:layout_weight="39"
-                android:background="@drawable/panel_card"
+                android:layout_weight="37"
                 android:orientation="vertical"
-                android:paddingStart="14dp"
-                android:paddingTop="12dp"
-                android:paddingEnd="14dp"
-                android:paddingBottom="10dp">
+                android:paddingStart="16dp"
+                android:paddingTop="14dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="14dp">
 
-                <!-- 组头：组名在左，第几组/多少个在右；两侧箭头只给触屏用，遥控器仍走左右键 -->
+                <!-- 组头：换组箭头顶到两侧，组名和「第几组/多少个」作为一个整体居中。
+                     箭头是矢量不是 ‹ › 字符：字符的墨迹在行框里天生偏下，
+                     挪字会连按钮框一起挪走，框和字就对不上了；矢量居在自己的框里，框也就是字。 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -57,50 +64,63 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
-                    <TextView
-                        android:id="@+id/groupName"
+                    <ImageView
+                        android:id="@+id/groupPrev"
+                        android:layout_width="40dp"
+                        android:layout_height="34dp"
+                        android:background="@drawable/arrow_ripple"
+                        android:clickable="true"
+                        android:contentDescription="@null"
+                        android:focusable="false"
+                        android:paddingStart="8dp"
+                        android:paddingTop="6dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="6dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_chevron_left" />
+
+                    <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
                         android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        android:textColor="#FFFFFF"
-                        android:textSize="20sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/groupCount"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="10dp"
-                        android:textColor="#8E8E93"
-                        android:textSize="12sp" />
-
-                    <TextView
-                        android:id="@+id/groupPrev"
-                        android:layout_width="30dp"
-                        android:layout_height="30dp"
-                        android:background="@drawable/pill_gray"
-                        android:clickable="true"
-                        android:focusable="false"
+                        android:baselineAligned="false"
                         android:gravity="center"
-                        android:text="&#8249;"
-                        android:textColor="#FFFFFF"
-                        android:textSize="18sp" />
+                        android:orientation="horizontal">
 
-                    <TextView
+                        <TextView
+                            android:id="@+id/groupName"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:textColor="#FFFFFF"
+                            android:textSize="20sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/groupCount"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:textColor="#8E8E93"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <ImageView
                         android:id="@+id/groupNext"
-                        android:layout_width="30dp"
-                        android:layout_height="30dp"
-                        android:layout_marginStart="8dp"
-                        android:background="@drawable/pill_gray"
+                        android:layout_width="40dp"
+                        android:layout_height="34dp"
+                        android:background="@drawable/arrow_ripple"
                         android:clickable="true"
+                        android:contentDescription="@null"
                         android:focusable="false"
-                        android:gravity="center"
-                        android:text="&#8250;"
-                        android:textColor="#FFFFFF"
-                        android:textSize="18sp" />
+                        android:paddingStart="8dp"
+                        android:paddingTop="6dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="6dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_chevron_right" />
                 </LinearLayout>
 
                 <FrameLayout
@@ -129,23 +149,57 @@
                 </FrameLayout>
             </LinearLayout>
 
-            <!-- 右：手机配置。二维码 + 地址 + 配对码，四行读完 -->
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="#14FFFFFF" />
+
+            <!-- 右：系统时间 + 手机配置。二维码 + 地址 + 配对码，四行读完 -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_marginStart="14dp"
-                android:layout_weight="28"
-                android:background="@drawable/panel_card"
+                android:layout_weight="26"
                 android:orientation="vertical"
                 android:paddingStart="16dp"
                 android:paddingTop="14dp"
                 android:paddingEnd="16dp"
                 android:paddingBottom="14dp">
 
+                <!-- 时钟从左列挪来：左列窄，频道名和节目单稍长就把时间顶出底边，这里横着宽裕 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:baselineAligned="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/infoClock"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:textColor="#FFFFFF"
+                        android:textSize="30sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/infoDate"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="end"
+                        android:maxLines="1"
+                        android:textColor="#80FFFFFF"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
                     android:ellipsize="end"
+                    android:gravity="center_horizontal"
                     android:maxLines="1"
                     android:text="手机配置 · 同一 WiFi"
                     android:textColor="#FFFFFF"
@@ -220,14 +274,6 @@
                         android:textColor="#FFFFFF"
                         android:textSize="11sp" />
                 </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:text="扫码进配置页：添加频道、管理网站登录，并可让电视直接打开某个登录页"
-                    android:textColor="#6C6C70"
-                    android:textSize="11sp" />
             </LinearLayout>
         </LinearLayout>
     </FrameLayout>

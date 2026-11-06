@@ -66,8 +66,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private lateinit var panelEmpty: View
     private lateinit var groupName: TextView
     private lateinit var groupCount: TextView
-    private lateinit var groupPrev: TextView
-    private lateinit var groupNext: TextView
+    private lateinit var groupPrev: ImageView
+    private lateinit var groupNext: ImageView
     private lateinit var qrImage: ImageView
     private lateinit var qrUrl: TextView
     private lateinit var qrPin: TextView
@@ -84,6 +84,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private lateinit var infoRemain: TextView
     private lateinit var infoNext: TextView
     private lateinit var infoProgress: View
+    private lateinit var guideNextLabel: TextView
+    private lateinit var guideRows: List<View>   // 进度线、分隔、 「接下来」标题：没节目单时一起收掉
     private var infoTarget: Channel? = null    // 信息栏当前展示的频道，节目单跟着它走
     private var infoFollowFocus = true        // 打开面板的首次聚焦不覆盖“在播频道”
     private val clockFmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
@@ -310,6 +312,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         infoRemain = findViewById(R.id.infoRemain)
         infoNext = findViewById(R.id.infoNext)
         infoProgress = findViewById(R.id.infoProgress)
+        guideNextLabel = findViewById(R.id.guideNextLabel)
+        guideRows = listOf<View>(findViewById(R.id.guideTrack), findViewById(R.id.guideDivider), guideNextLabel)
         // 换码按钮：tvOS 的焦点语言是放大提亮，不是描边
         qrRegen.setOnClickListener { rotatePin() }
         qrRegen.addFocusScale()
@@ -495,8 +499,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         // 首尾没有可换的组，箭头压暗禁用
         groupPrev.isEnabled = curGroupIdx > 0
         groupNext.isEnabled = curGroupIdx < groups.size - 1
-        groupPrev.alpha = if (groupPrev.isEnabled) 1f else 0.28f
-        groupNext.alpha = if (groupNext.isEnabled) 1f else 0.28f
+        groupPrev.alpha = if (groupPrev.isEnabled) 1f else 0.35f
+        groupNext.alpha = if (groupNext.isEnabled) 1f else 0.35f
         renderChannelList()
     }
 
@@ -689,16 +693,20 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             }
             infoRemain.text = ""
             infoNext.text = ""
-            setGuideProgress(0)
+            guideNextLabel.text = "接下来"
+            guideRows.forEach { it.visibility = View.GONE }
             return
         }
+        guideRows.forEach { it.visibility = View.VISIBLE }
         infoNow.text = guide.nowText
         // 左列窄，时段和剩余都压成最短写法，免得被省略号截掉
         infoRemain.text = guide.now?.let {
             "${guide.timeText.replace(" ~ ", "~")} · 剩${leftMinutes(it.stop)}"
         } ?: guide.timeText
-        infoNext.text = guide.next?.let { "${it.title} ${clockFmt.format(Date(it.start))}" }
-            ?: "暂无节目单"
+        // 开档时间跟在「接下来」后面：节目单不锁行数，标题再长也整行留给标题
+        val next = guide.next
+        guideNextLabel.text = next?.let { "接下来 ${clockFmt.format(Date(it.start))}" } ?: "接下来"
+        infoNext.text = next?.title ?: "暂无节目单"
         setGuideProgress(guide.percent)
     }
 
