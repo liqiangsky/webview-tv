@@ -10,7 +10,9 @@ data class Channel(
     val line: Int,
     val group: String,
     val logo: String,
-    val quality: String
+    val quality: String,
+    /** 来源：用户自己填的备注（哪个站/哪个 App 来的），默认空，应用不解析它 */
+    val source: String = ""
 )
 
 data class Group(val name: String, val channels: List<Channel>)

@@ -138,6 +138,8 @@ class ConfigServer(
                 }
             method == "GET" && (path.isEmpty() || path == "config.html") -> sendPage(out)
             method == "GET" && path == "api/state" -> sendApi(out, pin) { stateJson() }
+            // 运行日志：配置页「日志」按钮直接用
+            method == "GET" && path == "api/log" -> sendApi(out, pin) { logJson() }
             method == "POST" && path.startsWith("api/") ->
                 sendApi(out, pin) { dispatch(path.removePrefix("api/"), parseJson(body)) }
             else -> sendText(out, 404, "text/plain; charset=utf-8", "not found")
@@ -401,7 +403,7 @@ class ConfigServer(
                     JSONObject()
                         .put("line", ch.line).put("name", ch.name)
                         .put("url", ch.url).put("logo", ch.logo)
-                        .put("quality", ch.quality)
+                        .put("quality", ch.quality).put("source", ch.source)
                 )
             }
             gs.put(JSONObject().put("name", g.name).put("channels", list))
@@ -413,15 +415,37 @@ class ConfigServer(
         val playing = hostProvider()?.playing()?.let {
             JSONObject().put("group", it.group).put("name", it.name).put("url", it.url)
         }
+        // 站点脚本条目 + 频道绑定，配置页一次拿到就够渲染了
+        val scriptsJson = JSONArray()
+        for (s in SiteScripts.all()) {
+            scriptsJson.put(
+                JSONObject().put("id", s.id).put("name", s.name).put("code", s.code)
+            )
+        }
+        val bindsJson = JSONObject()
+        for (ch in ChannelStore.groups().flatMap { it.channels }) {
+            val id = SiteScripts.bindOf(ch.url)
+            if (id.isNotEmpty()) bindsJson.put(ch.url, id)
+        }
         return JSONObject()
             .put("ok", true)
             .put("groups", gs)
             .put("logins", logins)
+            .put("scripts", scriptsJson)
+            .put("binds", bindsJson)
             .put("playing", playing ?: JSONObject.NULL)
             .put("remoteReady", remoteProvider() != null)
+            .put("dev", ChannelStore.devFlags())
             .put("device", android.os.Build.MODEL)
             .let { if (added >= 0) it.put("added", added) else it }
             .toString()
+    }
+
+    /** 最近的运行日志（内存环形区，进程退出即丢） */
+    private fun logJson(): String {
+        val arr = JSONArray()
+        for (line in TvLog.recent(300)) arr.put(line)
+        return JSONObject().put("ok", true).put("lines", arr).toString()
     }
 
     // ---------------- 写操作 ----------------
@@ -434,11 +458,15 @@ class ConfigServer(
 
         when (op) {
             "ch.add" -> return ChannelStore
-                .addChannel(arg.str("group"), arg.str("name"), arg.str("url"), arg.str("quality"))
+                .addChannel(
+                    arg.str("group"), arg.str("name"), arg.str("url"), arg.str("quality"),
+                    arg.str("source")
+                )
                 .fold({ stateJson() }, { fail(it.message ?: "添加失败") })
             "ch.upd" -> return ChannelStore.updateChannel(
                 arg.optInt("line", -1), arg.str("group"), arg.str("name"), arg.str("url"),
-                arg.str("newGroup"), arg.str("newName"), arg.str("newUrl"), arg.str("newQuality")
+                arg.str("newGroup"), arg.str("newName"), arg.str("newUrl"), arg.str("newQuality"),
+                arg.str("newSource")
             ).fold({ stateJson() }, { fail(it.message ?: "修改失败") })
             "ch.del" -> return ChannelStore.deleteChannel(
                 arg.optInt("line", -1), arg.str("group"), arg.str("name"), arg.str("url")
@@ -461,6 +489,21 @@ class ConfigServer(
             "login.upd" -> return ChannelStore.updateLogin(arg.str("oldUrl"), arg.str("name"), arg.str("url"))
                 .fold({ stateJson() }, { fail(it.message ?: "修改失败") })
             "pin.regenerate" -> return ok(JSONObject().put("pin", ChannelStore.regeneratePin()))
+            // 站点脚本：逐条增删改（配置页列表式管理），以及频道 → 脚本的绑定
+            "script.add" -> return SiteScripts
+                .add(arg.str("name"), arg.str("code"))
+                .fold({ stateJson() }, { fail(it.message ?: "新建失败") })
+            "script.upd" -> return SiteScripts
+                .update(arg.str("id"), arg.str("name"), arg.str("code"))
+                .fold({ stateJson() }, { fail(it.message ?: "保存失败") })
+            "script.del" -> return SiteScripts.remove(arg.str("id"))
+                .fold({ stateJson() }, { fail(it.message ?: "删除失败") })
+            "script.bind" -> return SiteScripts.bind(arg.str("url"), arg.str("id"))
+                .fold({ stateJson() }, { fail(it.message ?: "绑定失败") })
+            // 开发者调试开关：改完回整份状态，配置页的开关跟着服务端值走，不在前端猜
+            "dev.set" -> return runCatching {
+                ChannelStore.setDevFlag(arg.str("name"), arg.optBoolean("value"))
+            }.fold({ stateJson() }, { fail(it.message ?: "保存失败") })
             "play" -> {
                 val ch = Channel(
                     arg.str("name"), arg.str("url"), arg.optInt("line", -1),

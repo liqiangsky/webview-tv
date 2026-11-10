@@ -26,6 +26,7 @@ object ChannelStore {
     private const val LOGIN_FILE = "logins.txt"
     private const val PREFS = "config"
     private const val KEY_PIN = "pin"
+    private const val KEY_DEV = "dev"
 
     private val main = Handler(Looper.getMainLooper())
     private val lock = Any()
@@ -77,7 +78,9 @@ object ChannelStore {
         }
     }
 
-    fun addChannel(group: String, name: String, url: String, quality: String): Result<Unit> =
+    fun addChannel(
+        group: String, name: String, url: String, quality: String, source: String = ""
+    ): Result<Unit> =
         mutateDb { db ->
             when {
                 name.isBlank() || url.isBlank() -> fail("名称和地址不能为空")
@@ -86,7 +89,7 @@ object ChannelStore {
                     val g = group.ifBlank { "其他频道" }.trim()
                     if (db.groups.none { it == g }) db.groups += g
                     db.channels += Channel(name.trim(), url.trim(), -1, g, name.trim(),
-                        quality.ifBlank { "HD" }.trim())
+                        quality.trim(), source.trim())
                     Result.success(Unit)
                 }
             }
@@ -95,7 +98,7 @@ object ChannelStore {
     /** 按原行号定位（网页拿到的就是行号）；行号失效时退回“分组+名称+地址”匹配。空的新字段表示不改 */
     fun updateChannel(
         line: Int, group: String, name: String, url: String,
-        newGroup: String, newName: String, newUrl: String, newQuality: String
+        newGroup: String, newName: String, newUrl: String, newQuality: String, newSource: String
     ): Result<Unit> = mutateDb { db ->
         val list = db.channels
         val i = indexOf(list, line, group, name, url)
@@ -112,7 +115,10 @@ object ChannelStore {
                     name = finalName, url = finalUrl,
                     group = g,
                     logo = if (newName.isBlank()) old.logo else finalName,
-                    quality = newQuality.ifBlank { old.quality }.trim()
+                    // 清晰度同样可以空：清空就真的清掉，面板上不显示
+                    quality = newQuality.trim(),
+                    // 来源是自由备注：清空就真的清掉，不沿用旧值
+                    source = newSource.trim()
                 )
                 Result.success(Unit)
             }
@@ -131,7 +137,7 @@ object ChannelStore {
 
     /** 整段导入：append 追加到现有列表之后，replace 覆盖全部 */
     fun importChannels(text: String, replace: Boolean): Result<Int> {
-        val parsed = parse(text)
+        val parsed = parse(trimImportColumns(text))
         if (parsed.channels.isEmpty())
             return Result.failure(IllegalArgumentException("没有解析出任何频道"))
         return mutateDb { db ->
@@ -151,6 +157,21 @@ object ChannelStore {
             Result.success(added)
         }
     }
+
+    /**
+     * 导入只认“名称,地址”：后面就算还带着别名、清晰度，也一律当没有。
+     * 补两个空列而不是直接截成两列，是为了让解析走到“台标缺省=名称、清晰度=空”，
+     * 不会因为少列而被当成 HD。
+     */
+    private fun trimImportColumns(text: String): String =
+        text.lineSequence().joinToString("\n") { raw ->
+            val t = raw.trim()
+            val parts = t.split(',')
+            if (t.isEmpty() || t.startsWith("#") || parts.size < 2 ||
+                parts[1].trim() == "#genre#"
+            ) raw
+            else parts[0] + "," + parts[1] + ",,"
+        }
 
     /** 只清频道，分组留着：空分组是用户自己建的，不该被顺手删掉 */
     fun clearChannels(): Result<Unit> = mutateDb { db ->
@@ -210,7 +231,7 @@ object ChannelStore {
     /**
      * 解析频道文本：
      *  - “分组名,#genre#”开一个分组（DIYP txt 格式），后面没有频道也算分组存在
-     *  - “频道名称,频道地址,台标名称,清晰度”一行一个，后两列可省略（台标名默认取频道名称，清晰度默认 HD），地址后可加 “$分组名”
+     *  - “频道名称,频道地址,台标名称,清晰度,来源”一行一个，后三列可省略（台标名默认取频道名称，清晰度默认 HD，来源默认空），地址后可加 “$分组名”
      *  - “#”开头为注释；分组之前的内容归“其他频道”
      */
     private fun parse(text: String): Db {
@@ -235,16 +256,18 @@ object ChannelStore {
                 .ifEmpty { "其他频道" }
             if (groups.none { it == g }) groups += g
             val logo = parts.getOrElse(2) { "" }.trim().ifEmpty { name }
-            val quality = parts.getOrElse(3) { "" }.trim().ifEmpty { "HD" }
-            if (url.isNotEmpty()) out += Channel(name, url, idx, g, logo, quality)
+            // 第四列缺省当 HD（老文件都是这么写的）；写了但留空就是空，不强塞默认值
+            val quality = if (parts.size > 3) parts[3].trim() else "HD"
+            val source = parts.getOrElse(4) { "" }.trim()
+            if (url.isNotEmpty()) out += Channel(name, url, idx, g, logo, quality, source)
         }
         return Db(groups, out)
     }
 
     /**
      * 按分组顺序落盘：每个分组一行标题，后面跟它的频道，空分组只留标题。
-     * 台标与频道同名、清晰度又是 HD 时只写两列，保持文件干净；
-     * 否则必须写满四列——第三列是台标、第四列是清晰度，跳着写会串位。
+     * 台标与频道同名、清晰度又是 HD、又没有来源时只写两列，保持文件干净；
+     * 否则从第三列起必须一路写满——第三列台标、第四列清晰度、第五列来源，跳着写会串位。
      */
     private fun serialize(db: Db): String {
         val sb = StringBuilder()
@@ -271,10 +294,11 @@ object ChannelStore {
     private fun appendChannel(sb: StringBuilder, ch: Channel) {
         sb.append(ch.name).append(',').append(ch.url)
         val customLogo = ch.logo.isNotEmpty() && ch.logo != ch.name
-        val customQuality = ch.quality.isNotEmpty() && ch.quality != "HD"
-        if (customLogo || customQuality) {
+        if (customLogo || ch.quality != "HD" || ch.source.isNotEmpty()) {
             sb.append(',').append(if (customLogo) ch.logo else ch.name)
-            sb.append(',').append(if (customQuality) ch.quality else "HD")
+            // 清晰度原样写（可能是空的）：空值写成空列，读回时才是空的
+            sb.append(',').append(ch.quality)
+            if (ch.source.isNotEmpty()) sb.append(',').append(ch.source)
         }
         sb.append('\n')
     }
@@ -356,6 +380,48 @@ object ChannelStore {
     fun regeneratePin(): String = synchronized(lock) {
         Random.nextInt(1000, 10000).toString().also {
             prefs.edit().putString(KEY_PIN, it).apply()
+        }
+    }
+
+    // ---------------- 开发者调试开关 ----------------
+
+    /**
+     * 配置页「开发者调试」里的几个开关。默认值就是原来的固定行为：
+     * 拦截和缓存一直是开的，调试浮层一直是关的。
+     * 存成一份 JSON 而不是一串布尔 key：加开关不用再动存储代码。
+     */
+    private val DEV_DEFAULTS = linkedMapOf(
+        // 不加载网页的 CSS / 图片 / 字体
+        "blockStyle" to true,
+        // 网页脚本走本地磁盘缓存
+        "scriptCache" to true,
+        // 屏幕上叠一层 video 状态浮层
+        "videoOverlay" to false,
+        // 全屏容器的边界标记 + 每秒一行几何日志（排查没铺满 / 画面偏移）
+        "frameMarkers" to false
+    )
+
+    private fun devPrefs(): org.json.JSONObject = runCatching {
+        org.json.JSONObject(prefs.getString(KEY_DEV, null) ?: "{}")
+    }.getOrDefault(org.json.JSONObject())
+
+    /** 读一个开关（播放页每次请求都按当前值走，改了不用重启） */
+    fun devFlag(name: String): Boolean = synchronized(lock) {
+        val def = DEV_DEFAULTS[name] ?: false
+        if (::prefs.isInitialized) devPrefs().optBoolean(name, def) else def
+    }
+
+    /** 写一个开关：只覆盖这一项，其余保持原样 */
+    fun setDevFlag(name: String, value: Boolean): Unit = synchronized(lock) {
+        require(name in DEV_DEFAULTS) { "未知开关：$name" }
+        prefs.edit().putString(KEY_DEV, devPrefs().put(name, value).toString()).apply()
+    }
+
+    /** 全部开关（缺项补默认值），配置页回显用 */
+    fun devFlags(): org.json.JSONObject = synchronized(lock) {
+        val cur = if (::prefs.isInitialized) devPrefs() else org.json.JSONObject()
+        org.json.JSONObject().also { out ->
+            for ((k, v) in DEV_DEFAULTS) out.put(k, cur.optBoolean(k, v))
         }
     }
 

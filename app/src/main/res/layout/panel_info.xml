@@ -43,7 +43,23 @@
             android:textColor="#E6FFFFFF"
             android:textSize="13sp" />
 
-        <!-- 清晰度来自频道表第四列（默认 HD） -->
+        <!-- 顺序：播放状态 → 来源 → 清晰度。两个都是可选信息，空着就不占位 -->
+        <TextView
+            android:id="@+id/infoSource"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/info_state_preview"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:paddingStart="12dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="5dp"
+            android:textColor="#99FFFFFF"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/infoQuality"
             android:layout_width="wrap_content"
@@ -56,7 +72,8 @@
             android:paddingEnd="12dp"
             android:paddingBottom="5dp"
             android:textColor="#99FFFFFF"
-            android:textSize="13sp" />
+            android:textSize="13sp"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- 自适应字号要有个定死的框才知道该缩到多大，所以频道名给死高度 + 限死一行：
