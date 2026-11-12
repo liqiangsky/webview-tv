@@ -2213,7 +2213,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   }
                 } catch (e) {}
               }
-              // 诊断用：视口尺寸 / iframe / 全屏容器实际覆盖范围
+              // 诊断用：视口尺寸 / 全屏容器实际覆盖范围
               out.push('vw=' + window.innerWidth + 'x' + window.innerHeight +
                 ' doc=' + document.documentElement.clientWidth + 'x' +
                 document.documentElement.clientHeight +
@@ -2273,7 +2273,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 页面一启动就监听 DOM：新出现的 video[src^="blob:"] 立刻全屏（包括同源 iframe 里）。
+        // 页面一启动就监听 DOM：新出现的 video[src^="blob:"] 立刻全屏（只看主文档，不进 iframe）。
         // keydown/click 处理器里调用才带“用户手势”，部分 WebView 全屏必须要有手势。
         // 把 blob 视频铺满视口（CSS 全屏，不依赖全屏 API / 用户手势）。
         // 页面上可能有多个 video（广告/正片）：选面积最大且带可播放 src 的那个
@@ -2841,11 +2841,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 诊断：报告页面 URL / 文字 / iframe / 深层 video 状态，并试一次全屏看返回结果
+        // 诊断：报告页面 URL / 文字 / 深层 video 状态，并试一次全屏看返回结果
         val PROBE_JS = """
             (function () {
               var out = {
-                url: location.href, n: 0, vids: [], iframes: [], text: '', tc: '',
+                url: location.href, n: 0, vids: [], text: '', tc: '',
                 elems: 0, htmlLen: 0,
                 fsEnabled: document.fullscreenEnabled, fe: !!document.fullscreenElement
               };
@@ -2856,43 +2856,16 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   .replace(/\s+/g, ' ').slice(0, 500);
                 out.elems = document.querySelectorAll('*').length;
                 out.htmlLen = document.documentElement.outerHTML.length;
-                var fs = document.querySelectorAll('iframe');
-                for (var k = 0; k < fs.length; k++) {
-                  out.iframes.push((fs[k].getAttribute('src') || '').slice(0, 100));
-                }
-                var docs = [document];
-                for (var i = 0; i < docs.length; i++) {
-                  var d = docs[i];
-                  // 普通子树里的 video
-                  var vs = d.querySelectorAll('video');
-                  for (var j = 0; j < vs.length; j++) {
-                    var v = vs[j];
-                    out.n++;
-                    out.vids.push({
-                      src: (v.getAttribute('src') || v.src || '').slice(0, 48),
-                      paused: v.paused, w: v.videoWidth,
-                      wk: typeof v.webkitEnterFullscreen, rs: typeof v.requestFullscreen
-                    });
-                  }
-                  // 同源 iframe 里的 video（含影子里的）：顺便再统计一次
-                  var fr = d.querySelectorAll('iframe');
-                  for (var m = 0; m < fr.length; m++) {
-                    try {
-                      if (fr[m].contentDocument) {
-                        docs.push(fr[m].contentDocument);
-                        var subVs = fr[m].contentDocument.querySelectorAll('video');
-                        for (var s2 = 0; s2 < subVs.length; s2++) {
-                          var sv = subVs[s2];
-                          out.n++;
-                          out.vids.push({
-                            src: (sv.getAttribute('src') || sv.src || '').slice(0, 48),
-                            paused: sv.paused, w: sv.videoWidth,
-                            wk: typeof sv.webkitEnterFullscreen, rs: typeof sv.requestFullscreen
-                          });
-                        }
-                      }
-                    } catch (e) {}
-                  }
+                // 只统计主文档：iframe 里的 video 不参与选片，这里也不列
+                var vs = document.querySelectorAll('video');
+                for (var j = 0; j < vs.length; j++) {
+                  var v = vs[j];
+                  out.n++;
+                  out.vids.push({
+                    src: (v.getAttribute('src') || v.src || '').slice(0, 48),
+                    paused: v.paused, w: v.videoWidth,
+                    wk: typeof v.webkitEnterFullscreen, rs: typeof v.requestFullscreen
+                  });
                 }
               } catch (e) { out.err = '' + e; }
               // 影子里的 video 也算进来（开放影子才行）：
