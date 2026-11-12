@@ -2154,6 +2154,16 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 // 而选片那边根本不会选它 —— 列出来只会让人以为它参与了竞争
                 return v.videoWidth > 0;
               }
+              // duration 只写成一个短标签：直播是 inf / -（NaN 或还没加载），
+              // 贴片广告和点播是有限的秒数，对应选片里的 finiteDur() 判据
+              function durText(v) {
+                try {
+                  var d = v.duration;
+                  if (typeof d !== 'number' || isNaN(d)) return '-';
+                  if (!isFinite(d)) return 'inf';
+                  return d.toFixed(1);
+                } catch (e) { return '-'; }
+              }
               function videoEntry(v, idx) {
                 if (!v) return 'v? src=- paused=- size=0x0 t=0.0 rs=- tracks=-';
                 var r = v.getBoundingClientRect();
@@ -2177,7 +2187,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   '\n  cur=' + cur +
                   '\n  obj=' + obj +
                   '\n  paused=' + v.paused + sizeLine +
-                  ' t=' + v.currentTime.toFixed(1) + (v.muted ? ' muted' : '') +
+                  ' t=' + v.currentTime.toFixed(1) +
+                  ' dur=' + durText(v) + (v.muted ? ' muted' : '') +
                   ' vol=' + v.volume.toFixed(2) +
                   ' vw=' + v.videoWidth + 'x' + v.videoHeight + ' rs=' + v.readyState +
                   ' tracks=' + (v.srcObject && v.srcObject.getTracks
@@ -2289,6 +2300,17 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               function isMp4Url(s) {
                 return /\.mp4(\?|#|&|$)/i.test(s || '');
               }
+              // 贴片广告是固定时长的一段媒体（15s/30s 那种），duration 一加载就是有限值；
+              // 直播是持续推流，duration 要么 Infinity，要么刚加载时 NaN / 0。
+              // 所以「有限且 > 0」只可能是点播式媒体，不是直播。
+              // 返回 false 一律表示「不像广告」（无限/未知也算）：flv、自研播放器报 NaN 很常见，
+              // 把不确定的当成广告会把正常直播排除掉，宁可不动它。
+              function finiteDur(v) {
+                try {
+                  var d = v.duration;
+                  return typeof d === 'number' && isFinite(d) && d > 0;
+                } catch (e) { return false; }
+              }
               // 声音分两段：
               //   起播阶段一律静音（声音闸门关着）—— 一个页面上有多个频道时，页面自己
               //     先播的那个台、和脚本切过去的目标台之间有一段过渡，不静音就会先听到
@@ -2345,6 +2367,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   }
                 }
                 // 先面积最大的可播放 video（视频真的出画面了再全屏，避免拿广告/占位 video）
+                // 分两档：duration 无限/未知的（直播）优先，有限时长的（贴片广告/点播）
+                // 只在没有直播可选时才用；两路同时存在时，广告再大也不跟直播抢。
+                var liveBest = null, liveArea = -1;
                 for (var j = 0; j < allV.length; j++) {
                   var v = allV[j];
                   if (v === exclude) continue;  // 已经铺满的那个不参与比较
@@ -2354,7 +2379,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   var r = v.getBoundingClientRect();
                   var area = r.width * r.height;
                   if (area > bestArea) { bestArea = area; best = v; }
+                  if (!finiteDur(v) && area > liveArea) { liveArea = area; liveBest = v; }
                 }
+                if (liveBest) return liveBest;
                 if (best) return best;
                 // 还没布局（面积 0）：退回第一个可播放的（同样跳过 mp4）
                 for (var j2 = 0; j2 < allV.length; j2++) {
