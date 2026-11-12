@@ -258,7 +258,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // openChannel(url)  —— 换台：重建 WebView（会话不复用）→ liveEntered=false
     //                      → showTransitionCover() 盖一次黑幕 → loadUrl
     //   ↓ 页面加载后由 onPageStarted 尽早注入 APPLY_FS_JS（不等整页加载完）
-    // APPLY_FS_JS       —— pickVideo()：在 document + 同源 iframe 里挑 src 可播
+    // APPLY_FS_JS       —— pickVideo()：在 document（含 open shadowRoot）里挑 src 可播
     //                      （blob: 或 m3u8/flv/mp4 等）且 getBoundingClientRect 面积最大的
     //                      <video>，塞进 #000 fixed 全屏容器、applyStyles 铺满、tryPlay 重试起播。
     //                      返回 '0'=还没找到可播的视频，'1'=已铺满。
@@ -2233,7 +2233,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 ' body=' + (document.body ? getComputedStyle(document.body).zoom : '-') +
                 ' bodyRect=' + (bb ? Math.round(bb.width) + 'x' + Math.round(bb.height) +
                   ' @' + Math.round(bb.left) + ',' + Math.round(bb.top) : '-'));
-              // iframe 不单独列：能播的 video 不管在哪一层都会被上面的 pickVideo() 抳过来，
+              // iframe 不单独列：选片只看主文档，iframe 里的 video 不参与比较，
               // 而 iframe 条目多、src 又长，列出来只会把浮层刷满
               var s = window.__tvFs;
               if (s && s.wrap) {
@@ -2352,20 +2352,15 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   el.addEventListener('canplay', fix);
                 } catch (e) {}
               }
-              // 在页面（含同源 iframe、含 open shadowRoot）里选面积最大的可播放 video
+              // 在页面（含 open shadowRoot）里选面积最大的可播放 video
               // shadow DOM 里的 video 不是 document.querySelectorAll('video') 能到的，
-              // 所以把文档/根里所有 video 以及 open shadow 树里的 video 都收集起来再比面积。
+              // 所以把文档里所有 video 以及 open shadow 树里的 video 都收集起来再比面积。
               // 用递归拍平，不锁定任何网站的标签/类名/加载方式（shadow 只可能是 open 的才统计）。
+              // 只看主文档，不进 iframe：iframe 里的 video 是另一个文档，坐标系和视口都对不上，
+              // 拿它的面积跟主文档的比没有意义；嵌在 iframe 里的播放器该由它自己的页面去铺满。
               function pickVideo(exclude) {
-                var docs = [document], allV = [], best = null, bestArea = -1;
-                for (var i = 0; i < docs.length; i++) {
-                  var d = docs[i];
-                  addAllVideosFromDocOrRoot(d, allV);
-                  var fs = d.querySelectorAll('iframe');
-                  for (var k = 0; k < fs.length; k++) {
-                    try { if (fs[k].contentDocument) docs.push(fs[k].contentDocument); } catch (e) {}
-                  }
-                }
+                var allV = [], best = null, bestArea = -1;
+                addAllVideosFromDocOrRoot(document, allV);
                 // 先面积最大的可播放 video（视频真的出画面了再全屏，避免拿广告/占位 video）
                 // 分两档：duration 无限/未知的（直播）优先，有限时长的（贴片广告/点播）
                 // 只在没有直播可选时才用；两路同时存在时，广告再大也不跟直播抢。
