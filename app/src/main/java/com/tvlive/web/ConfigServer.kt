@@ -513,6 +513,22 @@ class ConfigServer(
                 return if (onMain { hostProvider()?.play(ch.group, ch.name, ch.url) == true })
                     stateJson() else fail("电视当前不在播放页")
             }
+            "cache.list" -> {
+                val stats = ScriptCache.stats(context)
+                val arr = JSONArray()
+                for (s in stats) {
+                    arr.put(
+                        JSONObject().put("host", s.host).put("count", s.count)
+                            .put("size", s.size).put("last", s.last)
+                    )
+                }
+                return ok(JSONObject().put("domains", arr).put("total", ScriptCache.total(stats)))
+            }
+            "cache.clear" -> {
+                // host 为空 = 全部清；本来就没有也算清好了，别让页面弹个没意义的错
+                ScriptCache.clear(context, arg.str("host"))
+                return ok()
+            }
             "login.open" -> {
                 val url = arg.str("url")
                 if (!url.startsWith("http")) return fail("地址要以 http 开头")

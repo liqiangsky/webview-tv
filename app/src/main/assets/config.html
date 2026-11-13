@@ -317,6 +317,8 @@
       <span class="q" id="cntLogin"></span><span class="chev"></span></div>
     <div class="row" data-page="script"><div class="txt"><div class="nm">站点脚本</div></div>
       <span class="q" id="cntScript"></span><span class="chev"></span></div>
+    <div class="row" data-page="cache"><div class="txt"><div class="nm">脚本缓存</div></div>
+      <span class="q" id="cntCache"></span><span class="chev"></span></div>
   </div>
 
   <div class="sec"><b>设置</b></div>
@@ -435,8 +437,30 @@
           （容器/视频矩形、视口、缩放、屏幕像素），用来分辨「没铺满」还是「画面偏了」。</div></div>
         <button class="sw" role="switch" data-dev="frameMarkers" aria-checked="false"></button></div>
     </div>
+
     <div class="hint">四个开关都即时生效：前两项下一次请求就按新值走；浮层和几何标记在播放画面上
       当场出现/消失，不用重启也不用切台。它们只影响这台电视的播放，不改变频道数据。</div>
+  </div>
+</div>
+
+<div class="page" id="p-cache" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>脚本缓存</h2>
+    <span class="side r"><button class="lnk sm" id="cacheReload">刷新</button></span>
+  </div>
+  <div class="pmain">
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">按频道域名分组</div>
+        <div class="note">一个台常常从好几个 CDN 拉 JS，它们的缓存都算在这个台的域名下；
+          清一行就是这个台的缓存全清。清掉后下次进台重新下载。</div></div></div>
+      <div id="cacheList"></div>
+    </div>
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">全部清除</div>
+        <div class="note">把所有频道的脚本缓存一起删掉。<span id="cacheSum"></span></div></div>
+        <button class="lnk" id="cacheClearAll">清除</button></div>
+    </div>
   </div>
 </div>
 
@@ -919,6 +943,7 @@ if (ch != null) {
       hide(pg);
     } else if (d.page != null) {
       show($('p-' + d.page));
+      if (d.page === 'cache') loadCache();
     } else if (d.dev != null) {
       // 开关先本地翻转一下，手感即时；服务端回包再由 renderDev 校回真实值
       var on = t.getAttribute('aria-checked') !== 'true';
@@ -966,6 +991,58 @@ if (ch != null) {
       sect.classList.toggle('folded', now);
       setFold(d.fold, now);
     }
+  });
+
+  // ---------------- 脚本缓存 ----------------
+
+  function fmtSize(n) {
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return Math.round(n / 1024) + ' KB';
+    return n + ' B';
+  }
+
+  /** 最近使用时间说人话：刚刚 / N 分钟前 / N 小时前 / N 天前 / 月日 */
+  function fmtAgo(ts) {
+    if (!ts) return '—';
+    var s = (Date.now() - ts) / 1000;
+    if (s < 60) return '刚刚';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+    if (s < 7 * 86400) return Math.floor(s / 86400) + ' 天前';
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+
+  /** 各域名的缓存占用：打开「开发者调试」时拉一次，清完再拉一次 */
+  function loadCache() {
+    api('cache.list').then(function (r) {
+      var j = r.json;
+      if (!j || !j.ok) return;
+      var list = j.domains || [];
+      $('cacheSum').textContent = list.length
+        ? '　共 ' + list.length + ' 个域名 / ' + fmtSize(j.total || 0) : '　（空）';
+      $('cntCache').textContent = list.length ? fmtSize(j.total || 0) : '';
+      $('cacheList').innerHTML = list.map(function (d) {
+        return '<div class="row noact"><div class="txt"><div class="nm">' + esc(d.host) + '</div>' +
+          '<div class="u">' + d.count + ' 个文件 · ' + fmtSize(d.size) +
+            ' · 最近 ' + fmtAgo(d.last) + '</div></div>' +
+          '<button class="lnk" data-cache="' + esc(d.host) + '">清除</button></div>';
+      }).join('');
+    }).catch(function () {});
+  }
+
+  document.body.addEventListener('click', function (ev) {
+    var b = ev.target.closest('#cacheReload,#cacheClearAll,[data-cache]');
+    if (!b) return;
+    if (b.id === 'cacheReload') { loadCache(); return; }
+    var host = b.dataset.cache;
+    var body = host != null ? { host: host } : {};
+    api('cache.clear', body).then(function (r) {
+      if (r.json && r.json.ok) {
+        toast(host != null ? '已清除 ' + host : '已清空脚本缓存');
+        loadCache();
+      } else toast((r.json && r.json.err) || '清除失败', true);
+    }).catch(function () {});
   });
 
   // ---------------- 运行日志 ----------------
@@ -1602,7 +1679,8 @@ if (ch != null) {
   }, 6000);
 
   setTheme(document.documentElement.classList.contains('dark'));
-  if (!pin()) askPin(); else refresh(false);
+  // 缓存占用顺手拿一次：管理列表里那行不用点进去就能看到已用多少
+  if (!pin()) askPin(); else { refresh(false); loadCache(); }
 })();
 </script>
 </body>

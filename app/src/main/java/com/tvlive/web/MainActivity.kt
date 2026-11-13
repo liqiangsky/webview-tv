@@ -1923,14 +1923,16 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     // ---------- 静态脚本磁盘缓存（同站多频道复用，二次进台免下载 JS） ----------
 
-    // 目录名带版本：v1 只存过没解压的原始字节（见 plainBody），那些条目一律作废，
-    // 留着还会被当成有效缓存回给内核
+    // 目录名带版本：v1 只存过没解压的原始字节（见 plainBody），v2 按脚本自己的域名分组，
+    // 那些条目一律作废（还能被当成有效缓存回给内核），整目录删掉
     private fun cacheRoot(): File = File(cacheDir, CACHE_DIR).apply {
         mkdirs()
         synchronized(legacyCacheLock) {
             if (!legacyCacheCleared) {
                 legacyCacheCleared = true
-                File(cacheDir, "webstatic").takeIf { it.isDirectory }?.deleteRecursively()
+                for (old in LEGACY_CACHE_DIRS) {
+                    File(cacheDir, old).takeIf { it.isDirectory }?.deleteRecursively()
+                }
             }
         }
     }
@@ -1963,13 +1965,24 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         }
     }
 
-    /** 域名分组目录：cache/webstatic/<host>/<路径哈希>.js|.meta */
+    /**
+     * 分组目录：cache/<CACHE_DIR>/<频道域名>/<整条 URL 哈希>.js|.meta
+     *
+     * 目录名按「频道自己的域名」算，不按脚本所在域名：一个台往往从好几个 CDN 拉 JS
+     * （页面是 www.xxx.cn，脚本却在 ydh5./s./cdn… 上），按资源域名分组会散成一堆，
+     * 清缓存时就没法把这个台的缓存一把清掉。
+     * 条目键仍是整条 URL 的哈希，同名文件不会互相覆盖。
+     */
     private fun cacheEntry(urlStr: String): Pair<File, String>? {
-        val host = URL(urlStr).host?.lowercase() ?: return null
         val key = MessageDigest.getInstance("MD5")
             .digest(urlStr.toByteArray()).joinToString("") { "%02x".format(it) }
+        val host = pageHost() ?: URL(urlStr).host?.lowercase() ?: return null
         return Pair(File(cacheRoot(), host), key)
     }
+
+    /** 当前播放页（就是当前频道）的域名；不在播放页时为 null */
+    private fun pageHost(): String? =
+        docUrl?.let { runCatching { URL(it).host?.lowercase() }.getOrNull() }
 
     /** 命中直接返回；未命中当场下载（就是页面本该收到的那份）并落盘 */
     private fun cacheLookupOrFetch(urlStr: String, origin: String?): WebResourceResponse? {
@@ -2150,9 +2163,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             "talkingdata.com", "bugly.qq.com"
         )
 
-        // 静态脚本磁盘缓存（按域名分组）：单文件上限 6MB、总预算 80MB
-        // 目录名带版本：v1 存的是没解压的原始字节，换版本名顺带把脏缓存整个作废
-        const val CACHE_DIR = "webstatic_v2"
+        // 静态脚本磁盘缓存（按频道域名分组）：单文件上限 6MB、总预算 80MB
+        // 目录名带版本：换分组方式就换版本名，旧目录顺带删掉（见 LEGACY_CACHE_DIRS）
+        const val CACHE_DIR = "webstatic_v3"
+        val LEGACY_CACHE_DIRS = arrayOf("webstatic", "webstatic_v2")
         const val CACHE_MAX_OBJECT = 6L * 1024 * 1024
         const val CACHE_BUDGET = 80L * 1024 * 1024
         // 无 Cache-Control 但文件名带内容哈希/版本号的 JS：按不可变资源缓存 7 天
