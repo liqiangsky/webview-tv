@@ -441,6 +441,35 @@ class ConfigServer(
             .toString()
     }
 
+    /** 节目单状态：加载了多少、当前源、覆盖到哪天、哪几个频道还没对上 */
+    private fun epgState(): String {
+        val st = EpgManager.status()
+        val custom = JSONArray()
+        for (s in EpgManager.customSources()) custom.put(s)
+        val builtin = JSONArray()
+        for (s in EpgManager.builtinSources()) builtin.put(s)
+        val missing = JSONArray()
+        for (g in ChannelStore.groups()) {
+            for (ch in g.channels) {
+                if (!EpgManager.hasGuide(ch.name) && !EpgManager.hasGuide(ch.logo)) {
+                    missing.put(JSONObject().put("name", ch.name).put("group", g.name))
+                }
+            }
+        }
+        val epg = JSONObject()
+            .put("loaded", st.loaded)
+            .put("attempted", st.attempted)
+            .put("source", st.source ?: JSONObject.NULL)
+            .put("coverage", st.coverage)
+            .put("channels", st.channels)
+            .put("names", st.names)
+            .put("stamp", st.stamp)
+            .put("custom", custom)
+            .put("builtin", builtin)
+            .put("missing", missing)
+        return JSONObject().put("ok", true).put("epg", epg).toString()
+    }
+
     /** 最近的运行日志（内存环形区，进程退出即丢） */
     private fun logJson(): String {
         val arr = JSONArray()
@@ -512,6 +541,18 @@ class ConfigServer(
                 // 回最新状态：配置页靠它把「播放中」标到刚点的这一行
                 return if (onMain { hostProvider()?.play(ch.group, ch.name, ch.url) == true })
                     stateJson() else fail("电视当前不在播放页")
+            }
+            "epg.state" -> return epgState()
+            "epg.refresh" -> {
+                // 立即拉一次，不等结果：XMLTV 几 MB，网页这边更新看状态就行
+                EpgManager.refreshNow(context) { }
+                return ok()
+            }
+            "epg.src.add" -> return if (EpgManager.addSource(arg.str("url"))) epgState()
+                else fail("地址要以 http 开头，或已经加过了")
+            "epg.src.del" -> {
+                if (!EpgManager.removeSource(arg.str("url"))) return fail("没找到这个源")
+                return epgState()
             }
             "cache.list" -> {
                 val stats = ScriptCache.stats(context)

@@ -319,6 +319,8 @@
       <span class="q" id="cntScript"></span><span class="chev"></span></div>
     <div class="row" data-page="cache"><div class="txt"><div class="nm">脚本缓存</div></div>
       <span class="q" id="cntCache"></span><span class="chev"></span></div>
+    <div class="row" data-page="epg"><div class="txt"><div class="nm">节目单</div></div>
+      <span class="q" id="cntEpg"></span><span class="chev"></span></div>
   </div>
 
   <div class="sec"><b>设置</b></div>
@@ -440,6 +442,43 @@
 
     <div class="hint">四个开关都即时生效：前两项下一次请求就按新值走；浮层和几何标记在播放画面上
       当场出现/消失，不用重启也不用切台。它们只影响这台电视的播放，不改变频道数据。</div>
+  </div>
+</div>
+
+<div class="page" id="p-epg" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>节目单</h2>
+    <span class="side r"><button class="lnk sm" id="epgReload">刷新</button></span>
+  </div>
+  <div class="pmain">
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">状态</div>
+        <div class="note" id="epgState">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">当前源</div>
+        <div class="u" id="epgSource">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">覆盖到</div>
+        <div class="u" id="epgCoverage">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">上次更新</div>
+        <div class="u" id="epgStamp">—</div></div>
+        <button class="lnk" id="epgGo">立即更新</button></div>
+    </div>
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">自定义节目源</div>
+        <div class="note">XMLTV 地址（.xml 或 .xml.gz）。加进来后排在内置镜像前面先试，
+          适合自己想看的那几套台在内置源里对不上时用。</div></div></div>
+      <div class="frow col"><label>地址</label>
+        <input id="epgUrl" inputmode="url" placeholder="https://example.com/epg.xml.gz" autocomplete="off"></div>
+      <div class="row noact"><div class="txt"><div class="nm">添加</div></div>
+        <button class="lnk" id="epgAdd">添加</button></div>
+      <div id="epgSrcList"></div>
+    </div>
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">没对上节目单的频道</div>
+        <div class="note" id="epgMissing">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">内置镜像</div>
+        <div class="note" id="epgBuiltin">—</div></div></div>
+    </div>
   </div>
 </div>
 
@@ -944,6 +983,7 @@ if (ch != null) {
     } else if (d.page != null) {
       show($('p-' + d.page));
       if (d.page === 'cache') loadCache();
+      if (d.page === 'epg') loadEpg();
     } else if (d.dev != null) {
       // 开关先本地翻转一下，手感即时；服务端回包再由 renderDev 校回真实值
       var on = t.getAttribute('aria-checked') !== 'true';
@@ -991,6 +1031,72 @@ if (ch != null) {
       sect.classList.toggle('folded', now);
       setFold(d.fold, now);
     }
+  });
+
+  // ---------------- 节目单 ----------------
+
+  /** 时间戳说人话：刚刚 / N 分钟前 / N 小时前 / 月日 时:分 */
+  function fmtWhen(ts) {
+    if (!ts) return '还没成功拉过';
+    var s = (Date.now() - ts) / 1000;
+    if (s < 60) return '刚刚';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
+      ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  function loadEpg() {
+    api('epg.state').then(function (r) {
+      var e = r.json && r.json.ok ? r.json.epg : null;
+      if (!e) return;
+      $('epgState').textContent = e.channels
+        ? e.channels + ' 个频道的节目，' + e.names + ' 个频道名可匹配'
+        : (e.attempted ? '没拿到可用的节目单（相关连不上，或源里没有当期节目）' : '还没节目单');
+      $('epgSource').textContent = e.source || '—';
+      $('epgCoverage').textContent = e.coverage || '—';
+      $('epgStamp').textContent = fmtWhen(e.stamp);
+      $('cntEpg').textContent = e.channels ? e.channels + ' 台' : '';
+      $('epgBuiltin').textContent = (e.builtin || []).length
+        ? '依次尝试：' + e.builtin.join('、') : '—';
+      var custom = e.custom || [];
+      $('epgSrcList').innerHTML = custom.length ? custom.map(function (s) {
+        return '<div class="row noact"><div class="txt"><div class="u" style="margin:0">' +
+          esc(s) + '</div></div><button class="lnk" data-epgdel="' + esc(s) + '">删除</button></div>';
+      }).join('') : '<div class="row noact"><div class="txt"><div class="note">'
+        + '还没加自定义源，用的都是内置镜像。</div></div></div>';
+      var miss = e.missing || [];
+      $('epgMissing').textContent = !e.channels ? '（还没节目单，先不用管）'
+        : (miss.length ? miss.length + ' 个：' + miss.map(function (m) { return m.name; }).join('、')
+          : '全部对上了');
+    }).catch(function () {});
+  }
+
+  document.body.addEventListener('click', function (ev) {
+    var t = ev.target.closest('#epgReload,#epgGo,#epgAdd,[data-epgdel]');
+    if (!t) return;
+    if (t.id === 'epgReload') { loadEpg(); return; }
+    if (t.id === 'epgGo') {
+      // 拉一次 XMLTV 要一会儿，先回个话，状态稍后自己刷新
+      api('epg.refresh').then(function () {
+        toast('已开始更新，过一会儿点「刷新」看结果');
+      }).catch(function () {});
+      return;
+    }
+    if (t.id === 'epgAdd') {
+      var u = $('epgUrl').value.trim();
+      if (!u) { toast('先填地址', true); return; }
+      api('epg.src.add', { url: u }).then(function (r) {
+        if (r.json && r.json.ok) { $('epgUrl').value = ''; toast('已添加'); loadEpg(); }
+        else toast((r.json && r.json.err) || '添加失败', true);
+      }).catch(function () {});
+      return;
+    }
+    api('epg.src.del', { url: t.dataset.epgdel }).then(function (r) {
+      if (r.json && r.json.ok) { toast('已删除'); loadEpg(); }
+      else toast((r.json && r.json.err) || '删除失败', true);
+    }).catch(function () {});
   });
 
   // ---------------- 脚本缓存 ----------------
@@ -1680,7 +1786,7 @@ if (ch != null) {
 
   setTheme(document.documentElement.classList.contains('dark'));
   // 缓存占用顺手拿一次：管理列表里那行不用点进去就能看到已用多少
-  if (!pin()) askPin(); else { refresh(false); loadCache(); }
+  if (!pin()) askPin(); else { refresh(false); loadCache(); loadEpg(); }
 })();
 </script>
 </body>

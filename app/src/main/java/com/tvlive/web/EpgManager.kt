@@ -86,6 +86,55 @@ object EpgManager {
     /** 数据换过后回主线程通知，界面重画 */
     var onChanged: (() -> Unit)? = null
 
+    // ---------------- 节目源管理（配置页） ----------------
+
+    // 用户自己加的源存在这里，排在内置源前面先试；内置的都是公开镜像，不给删
+    private const val KEY_SOURCES = "custom"
+
+    private val prefs get() = app.getSharedPreferences("epg_source", Context.MODE_PRIVATE)
+
+    fun customSources(): List<String> =
+        prefs.getString(KEY_SOURCES, "").orEmpty().split('\n')
+            .map { it.trim() }.filter { it.isNotEmpty() }
+
+    fun builtinSources(): List<String> = SOURCES
+
+    /** 实际尝试顺序：自定义的在前，内置的在后（去重） */
+    private fun allSources(): List<String> = (customSources() + SOURCES).distinct()
+
+    /** 加一个自定义源；地址不合法或已经存在就返回 false */
+    fun addSource(url: String): Boolean {
+        val u = url.trim()
+        if (!u.startsWith("http://") && !u.startsWith("https://")) return false
+        val list = customSources()
+        if (list.contains(u)) return false
+        prefs.edit().putString(KEY_SOURCES, (list + u).joinToString("\n")).apply()
+        return true
+    }
+
+    fun removeSource(url: String): Boolean {
+        val list = customSources()
+        if (!list.contains(url)) return false
+        prefs.edit().putString(KEY_SOURCES, list.filter { it != url }.joinToString("\n")).apply()
+        return true
+    }
+
+    /** 当前状态：配置页那几行字都用它 */
+    data class Status(
+        val loaded: Boolean, val attempted: Boolean, val source: String?, val coverage: String,
+        val channels: Int, val names: Int, val stamp: Long, val fetching: Boolean
+    )
+
+    fun status(): Status = Status(
+        loaded, attempted, source, coverageText, schedule.size, keys.size, lastStamp(), fetching
+    )
+
+    private fun lastStamp(): Long =
+        runCatching { File(dir, "stamp.txt").readText().trim().toLong() }.getOrDefault(0L)
+
+    /** 这个频道名对没对上节目单 */
+    fun hasGuide(name: String): Boolean = !schedule[lookupKey(name)].isNullOrEmpty()
+
     fun init(context: Context) {
         if (!::app.isInitialized) {
             app = context.applicationContext
@@ -124,7 +173,7 @@ object EpgManager {
         if (fetching) return false
         fetching = true
         try {
-            for (url in SOURCES) {
+            for (url in allSources()) {
                 if (!download(url)) continue
                 runCatching { File(dir, "stamp.txt").writeText(System.currentTimeMillis().toString()) }
                 parse()
@@ -135,6 +184,8 @@ object EpgManager {
                     continue
                 }
                 source = url
+                // 记下来：重启后日志里“这份数据是哪个源来的”还能说清楚
+                runCatching { File(dir, "source.txt").writeText(url) }
                 main.post { onChanged?.invoke() }
                 return true
             }
@@ -238,6 +289,10 @@ object EpgManager {
             coverageEnd = end
             schedule = progs
             loaded = true
+            if (source == null) {
+                source = runCatching { File(dir, "source.txt").readText().trim() }.getOrNull()
+                    ?.ifEmpty { null }
+            }
             Log.d(TAG, "epg: loaded channels=${progs.size} names=${index.size}")
         } catch (e: Exception) {
             Log.d(TAG, "epg: parse failed ${e.javaClass.simpleName} ${e.message}")
