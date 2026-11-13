@@ -2117,10 +2117,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               // 标题和正文不打了：只用来认页面，占地方；body.innerText 还会每轮
               // 强制一次布局（700ms 一次），去掉也省事
               // shadow 里的 video 也算进来（开放影子才行）：每个 host 的影子树里再搜一次 video
-              var vShadow = [];
-              tryShadowVideoCollection(document, vShadow);
-              tryShadowVideoCollection(document.documentElement, vShadow);
-              tryShadowVideoCollection(document.body, vShadow);
+              // 影子根里的 video：由 attachShadow 拦截 + MutationObserver 收集在
+              // window.__tvShadowVids 里，这里直接读，不再钻树
+              var vShadow = window.__tvShadowVids || [];
               var vs = document.querySelectorAll('video');
               var vIdx = 0;
               // 只列会被选片逻辑考虑的那些：mp4 广告、以及还没拿到流也没出画面的占位元素，
@@ -2194,24 +2193,6 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   ' tracks=' + (v.srcObject && v.srcObject.getTracks
                     ? v.srcObject.getTracks().map(function (t) { return t.kind; }).join(',')
                     : '-');
-              }
-              function tryShadowVideoCollection(host, out) {
-                if (!host) return;
-                try {
-                  var kids = host.children;
-                  for (var i = 0; i < kids.length; i++) {
-                    var k = kids[i];
-                    if (k.tagName === 'VIDEO') out.push(k);
-                    if (k.shadowRoot) {
-                      try {
-                        var vs2 = k.shadowRoot.querySelectorAll('video');
-                        for (var j = 0; j < vs2.length; j++) out.push(vs2[j]);
-                      } catch (e) {}
-                      tryShadowVideoCollection(k.shadowRoot, out);
-                    }
-                    tryShadowVideoCollection(k, out);
-                  }
-                } catch (e) {}
               }
               // 诊断用：视口尺寸 / 全屏容器实际覆盖范围
               out.push('vw=' + window.innerWidth + 'x' + window.innerHeight +
@@ -2352,15 +2333,103 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   el.addEventListener('canplay', fix);
                 } catch (e) {}
               }
-              // 在页面（含 open shadowRoot）里选面积最大的可播放 video
-              // shadow DOM 里的 video 不是 document.querySelectorAll('video') 能到的，
-              // 所以把文档里所有 video 以及 open shadow 树里的 video 都收集起来再比面积。
-              // 用递归拍平，不锁定任何网站的标签/类名/加载方式（shadow 只可能是 open 的才统计）。
-              // 只看主文档，不进 iframe：iframe 里的 video 是另一个文档，坐标系和视口都对不上，
-              // 拿它的面积跟主文档的比没有意义；嵌在 iframe 里的播放器该由它自己的页面去铺满。
+              // ---- 影子 DOM 里的 video：attachShadow 拦截 + MutationObserver 收集 ----
+              // shadowRoot 里的 video 用 document.querySelectorAll('video') 拿不到。以前是每次选片
+              // 递归钻树；改成拦一次 attachShadow：谁建了影子根就拿到它的引用、对根挂观察器，
+              // 看着它内部插进来的 video 登记到清单里，选片时直接读清单。
+              // 好处是不猜标签/类名，closed 的影子根也收得到（根本身在我们手里）。
+              var SHADOW_VIDS = window.__tvShadowVids || (window.__tvShadowVids = []);
+              function shadowAdd(el) {
+                if (!el || el.tagName !== 'VIDEO') return;
+                if (SHADOW_VIDS.indexOf(el) >= 0) return;
+                SHADOW_VIDS.push(el);
+              }
+              function shadowAddTree(root) {
+                if (!root || !root.querySelectorAll) return;
+                try {
+                  var vs = root.querySelectorAll('video');
+                  for (var i = 0; i < vs.length; i++) shadowAdd(vs[i]);
+                } catch (e) {}
+              }
+              function shadowWatch(root) {
+                if (!root || root.__tvShadowWatched) return;
+                root.__tvShadowWatched = 1;
+                shadowAddTree(root);
+                try {
+                  new MutationObserver(function (ms) {
+                    for (var i = 0; i < ms.length; i++) {
+                      var added = ms[i].addedNodes;
+                      for (var j = 0; j < added.length; j++) {
+                        var n = added[j];
+                        if (!n || n.nodeType !== 1) continue;
+                        if (n.tagName === 'VIDEO') shadowAdd(n);
+                        else shadowAddTree(n);
+                      }
+                    }
+                  }).observe(root, { childList: true, subtree: true });
+                } catch (e) {}
+              }
+              // 组件的 shadowRoot 刚建出来时它自己还在构造中，同步插 DOM 很常见；
+              // 观察器推到本轮之后挂，不去打扰它的初始化
+              function shadowWatchLater(root) {
+                if (!root) return;
+                try {
+                  if (typeof Promise === 'function') {
+                    Promise.resolve().then(function () { try { shadowWatch(root); } catch (e) {} });
+                  } else {
+                    setTimeout(function () { try { shadowWatch(root); } catch (e) {} }, 0);
+                  }
+                } catch (e) {}
+              }
+              if (!window.__tvShadowHook) {
+                window.__tvShadowHook = 1;
+                try {
+                  var rawAttach = Element.prototype.attachShadow;
+                  if (rawAttach && !rawAttach.__tvHooked) {
+                    var hookedAttach = function (opts) {
+                      var root = rawAttach.call(this, opts);
+                      try { shadowWatchLater(root); } catch (e) {}
+                      return root;
+                    };
+                    // 让钩子尽量像原生：名称、形参个数、toString 都对齐，
+                    // 页面里查「原型被改过没有」的逻辑看到的是 [native code]
+                    try { Object.defineProperty(hookedAttach, 'name', { value: 'attachShadow' }); } catch (e) {}
+                    try { Object.defineProperty(hookedAttach, 'length', { value: 1 }); } catch (e) {}
+                    try {
+                      hookedAttach.toString = function () {
+                        return 'function attachShadow() { [native code] }';
+                      };
+                    } catch (e) {}
+                    hookedAttach.__tvHooked = 1;
+                    Element.prototype.attachShadow = hookedAttach;
+                  }
+                } catch (e) {}
+              }
+              // 钩子装上之前页面已经建好的影子根：开页只补登记一次（能枚举到的 open 根）
+              if (!window.__tvShadowSeeded) {
+                window.__tvShadowSeeded = 1;
+                try {
+                  var hosts = document.querySelectorAll('*');
+                  for (var h = 0; h < hosts.length; h++) {
+                    if (hosts[h].shadowRoot) shadowWatch(hosts[h].shadowRoot);
+                  }
+                } catch (e) {}
+              }
+
+              // 在页面（含 shadowRoot）里选面积最大的可播放 video
+              // 影子根里的靠上面的钩子清单补进来；iframe 一律不管：那是另一个坐标系的文档。
               function pickVideo(exclude) {
                 var allV = [], best = null, bestArea = -1;
-                addAllVideosFromDocOrRoot(document, allV);
+                try {
+                  var vs0 = document.querySelectorAll('video');
+                  for (var i0 = 0; i0 < vs0.length; i0++) allV.push(vs0[i0]);
+                } catch (e) {}
+                for (var s0 = 0; s0 < SHADOW_VIDS.length; s0++) {
+                  var sv0 = SHADOW_VIDS[s0];
+                  if (!sv0 || sv0.isConnected === false) continue;  // 已经不在文档里的丢掉
+                  if (allV.indexOf(sv0) >= 0) continue;
+                  allV.push(sv0);
+                }
                 // 先面积最大的可播放 video（视频真的出画面了再全屏，避免拿广告/占位 video）
                 // 分两档：duration 无限/未知的（直播）优先，有限时长的（贴片广告/点播）
                 // 只在没有直播可选时才用；两路同时存在时，广告再大也不跟直播抢。
@@ -2385,51 +2454,6 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   if (ps2 && !isMp4Url(ps2)) return allV[j2];
                 }
                 return null;
-              }
-              // 把一个文档/根里所有 video（含 open shadowRoot 内的）收集起来
-              function addAllVideosFromDocOrRoot(docOrRoot, out) {
-                if (!docOrRoot) return;
-                // 普通子树里的 video
-                try {
-                  var vs = docOrRoot.querySelectorAll('video');
-                  for (var i = 0; i < vs.length; i++) out.push(vs[i]);
-                } catch (e) {}
-                // 每个可枚举的影子宿主都进一次 open shadow（嵌套也支持）：
-                // 1) scope 自己内部的影子宿主（递归进去后会再遍历到宿主下边的普通孩子）
-                // 2) document.documentElement 下的影子组件（某些播放器直接挂在 html 之下）
-                var seeds = [];
-                try { seeds.push(docOrRoot.documentElement); } catch (e) {}
-                try { seeds.push(docOrRoot.body); } catch (e) {}
-                for (var s = 0; s < seeds.length; s++) {
-                  if (!seeds[s]) continue;
-                  diveShadowSeeds(seeds[s], out);
-                }
-              }
-              function diveShadowSeeds(host, out) {
-                if (!host) return;
-                try {
-                  var kids = host.children;
-                  for (var i = 0; i < kids.length; i++) {
-                    var k = kids[i];
-                    tryPushVideo(k, out);
-                    if (k.shadowRoot) {
-                      // open shadow 里的 video
-                      try {
-                        var vs = k.shadowRoot.querySelectorAll('video');
-                        for (var j = 0; j < vs.length; j++) out.push(vs[j]);
-                      } catch (e) {}
-                      // shadow 里的 shadow host（嵌套组件）：再往里钻
-                      diveShadowSeeds(k.shadowRoot, out);
-                    }
-                    diveShadowSeeds(k, out);
-                  }
-                } catch (e) {}
-              }
-              function tryPushVideo(el, out) {
-                if (!el) return;
-                try { if (el.tagName === 'VIDEO' && el.src) out.push(el); } catch (e) {}
-                // 同一个元素可能已经被 document.querySelectorAll 收录过，重复不太重要，
-                // 但如果它有属性 src 大概率可播，不如再保一次（重复靠下游 playableSrc 过滤面积）
               }
               // 有些播放器第一次 play() 不生效（源还没挂上/内部状态没就绪），得再点一次。
               // 没播起来就隔 100ms 再 play()，最多 5 次；链路已在跑时不重复起。
@@ -2868,43 +2892,19 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   });
                 }
               } catch (e) { out.err = '' + e; }
-              // 影子里的 video 也算进来（开放影子才行）：
-              // 遍历当前页面的所有影子宿主，递归统计影子树里的 video
+              // 影子根里的 video 也算进来：读 attachShadow 拦截时收集的那份清单
               (function () {
-                function walkForShadowVideo(host) {
-                  if (!host) return;
-                  try {
-                    var kids = host.children;
-                    for (var i2 = 0; i2 < kids.length; i2++) {
-                      var k = kids[i2];
-                      if (k.tagName === 'VIDEO') {
-                        var sv = k;
-                        out.n++;
-                        out.vids.push({
-                          src: (sv.getAttribute('src') || sv.src || '').slice(0, 48),
-                          paused: sv.paused, w: sv.videoWidth,
-                          wk: typeof sv.webkitEnterFullscreen, rs: typeof sv.requestFullscreen
-                        });
-                      }
-                      if (k.shadowRoot) {
-                        var vs3 = k.shadowRoot.querySelectorAll('video');
-                        for (var j3 = 0; j3 < vs3.length; j3++) {
-                          var sv2 = vs3[j3];
-                          out.n++;
-                          out.vids.push({
-                            src: (sv2.getAttribute('src') || sv2.src || '').slice(0, 48),
-                            paused: sv2.paused, w: sv2.videoWidth,
-                            wk: typeof sv2.webkitEnterFullscreen, rs: typeof sv2.requestFullscreen
-                          });
-                        }
-                        walkForShadowVideo(k.shadowRoot);
-                      }
-                      walkForShadowVideo(k);
-                    }
-                  } catch (e) {}
+                var shadowVids = window.__tvShadowVids || [];
+                for (var i2 = 0; i2 < shadowVids.length; i2++) {
+                  var sv = shadowVids[i2];
+                  if (!sv || sv.isConnected === false) continue;
+                  out.n++;
+                  out.vids.push({
+                    src: (sv.getAttribute('src') || sv.src || '').slice(0, 48),
+                    paused: sv.paused, w: sv.videoWidth,
+                    wk: typeof sv.webkitEnterFullscreen, rs: typeof sv.requestFullscreen
+                  });
                 }
-                walkForShadowVideo(document.documentElement);
-                walkForShadowVideo(document.body);
               })();
               var v0 = document.querySelector('video[src^="blob:"]') ||
                 document.querySelector('video');
