@@ -330,6 +330,57 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // 只在闸门关着时生效（window.__tvSoundOn），开声之后不干预页面。
     private val EARLY_MUTE_JS = """
         (function () {
+          // Android WebView 的 UA-CH 固定汇报 mobile=true / platform=Android，换 UA 字符串也改不了；
+          // 只看 navigator.userAgentData.mobile 的站点就会直接跳到手机站。改成按桌面浏览器汇报。
+          try {
+            if (!window.__tvUaShim) {
+              window.__tvUaShim = 1;
+              var brands = [
+                { brand: 'Chromium', version: '156' },
+                { brand: 'Google Chrome', version: '156' },
+                { brand: 'Not?A_Brand', version: '24' }
+              ];
+              var meta = { mobile: false, platform: 'Windows', brands: brands };
+              meta.getHighEntropyValues = function (hints) {
+                var all = { architecture: 'x86', bitness: '64', model: '', platformVersion: '15.0.0',
+                  uaFullVersion: '156.0.0.0', fullVersionList: brands, wow64: false, mobile: false };
+                var out = {};
+                (hints || []).forEach(function (k) { if (k in all) out[k] = all[k]; });
+                return Promise.resolve(out);
+              };
+              meta.toJSON = function () {
+                return { brands: brands, mobile: false, platform: 'Windows' };
+              };
+              Object.defineProperty(navigator, 'userAgentData', {
+                configurable: true, get: function () { return meta; }
+              });
+              // 触摸能力同样按桌面报：电视没有触摸屏，WebView 却固定给 5 个触摸点、
+              // 指针算 coarse，站点拿这两条加屏幕尺寸就能判定成手机
+              try {
+                Object.defineProperty(navigator, 'maxTouchPoints', {
+                  configurable: true, get: function () { return 0; }
+                });
+              } catch (e) {}
+              try {
+                var rawMM = window.matchMedia;
+                if (rawMM && !rawMM.__tvPatched) {
+                  var mm = function (q) {
+                    if (typeof q === 'string' && q.indexOf('pointer') >= 0 && q.indexOf('coarse') < 0) {
+                      return {
+                        matches: true, media: q, onchange: null,
+                        addListener: function () {}, removeListener: function () {},
+                        addEventListener: function () {}, removeEventListener: function () {},
+                        dispatchEvent: function () { return false; }
+                      };
+                    }
+                    return rawMM.call(window, q);
+                  };
+                  mm.__tvPatched = 1;
+                  window.matchMedia = mm;
+                }
+              } catch (e) {}
+            }
+          } catch (e) {}
           if (window.__tvMuteHook) return '1';
           window.__tvMuteHook = 1;
           function mute(el) {
