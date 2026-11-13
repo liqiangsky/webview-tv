@@ -15,10 +15,10 @@ import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
-import android.view.WindowManager
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -31,6 +31,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.WindowCompat
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -112,9 +113,11 @@ class LoginActivity : Activity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(dp(10), dp(5), dp(10), dp(5))
         }
+        // 钉在右下角：网页顶部那一条几乎都是导航/搜索框，压在上面会挡住要点的东西；
+        // 左下角被缩放条占着，所以靠右下
         root.addView(statusText, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.START).apply { setMargins(dp(12), dp(12), 0, 0) })
+            Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(12), dp(12)) })
 
         // 钉在左下角的原生条：缩放三档 + 关闭，页面怎么重排都跟它无关
         val bar = LinearLayout(this).apply {
@@ -149,6 +152,17 @@ class LoginActivity : Activity() {
         updateStatus()
     }
 
+    /**
+     * 系统返回键优先收给网页历史，网页没有历史了才退出本页。
+     * onBackPressed 在 API 30 就已标记过时（官方建议换成 OnBackInvokedDispatcher），
+     * 但本页没有依赖 androidx.activity，不宜为这一处再引入；覆写本身在 26~35 上行为一致，
+     * 所以这里保留传统写法，只把编译告警按掉。
+     */
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onBackPressed() {
+        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+    }
+
     /** 网页指令的挂出对象：销毁时要确认挂着的还是自己，别把后继登录页的注册抹掉 */
     private val remoteSink: RemoteSink = { onCommand(it) }
 
@@ -162,11 +176,6 @@ class LoginActivity : Activity() {
             app.config.pushRemoteState()
         }
         super.onDestroy()
-    }
-
-    /** 系统返回键优先收给网页历史，网页没有历史了才退出本页 */
-    override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     /**
@@ -488,16 +497,21 @@ class LoginActivity : Activity() {
     }
 
     private fun hideSystemUi() {
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_FULLSCREEN,
-            WindowManager.LayoutParams.FLAG_FULLSCREEN
-        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // 走 androidx 的兼容入口：系统那几个窗口标志在 API 30 之后都标了过时
+            WindowCompat.setDecorFitsSystemWindows(window, false)
             window.insetsController?.let {
                 it.hide(WindowInsets.Type.systemBars())
                 it.systemBarsBehavior =
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
         }
     }
 

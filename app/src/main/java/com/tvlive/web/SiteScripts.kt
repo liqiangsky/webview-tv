@@ -15,7 +15,7 @@ import java.io.File
  * 存储 filesDir/site_scripts.json：
  *
  *     { "scripts": [ { "id": "s1", "name": "江苏卫视", "code": "..." } ],
- *       "binds":   { "https://live.jstv.com/": "s1" } }
+ *       "binds":   { "https://example.com/": "s1" } }
  *
  * scripts 是配置页里能新建/编辑/删除的条目；binds 是频道级的绑定（按频道地址记，
  * 不动 channels.txt）。没有任何自动规则：频道上选了哪条就跑哪条，没选就不跑。

@@ -36,6 +36,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import org.json.JSONTokener
@@ -358,7 +359,14 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
           // 播放器也可能自己把静音关掉再播：拦住 play 这一下
           try {
             var proto = HTMLMediaElement.prototype, rawPlay = proto.play;
-            proto.play = function () { mute(this); return rawPlay.apply(this, arguments); };
+            proto.play = function () {
+              // 铺满之外的那一路（典型：直播起来之后才被插进来的广告）即使声音闸门已经打开
+              // 也不能出声，否则直播画面里会混进广告音
+              var cur = window.__tvFs && window.__tvFs.el;
+              if (cur && this !== cur) { try { this.muted = true; } catch (e) {} }
+              mute(this);
+              return rawPlay.apply(this, arguments);
+            };
           } catch (e) {}
           return '1';
         })();
@@ -433,7 +441,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 scriptRanAt = 0L
                 if (fresh != null) injectSiteScript()
             }
-            // 临时诊断：每秒一轮太吵，隔轮打一次（只在调试边界标记打开时）
+            // 几何日志每秒一轮太吵，隔轮打一次（只在调试边界标记打开时）
             if (ChannelStore.devFlag("frameMarkers")) {
                 geomTick = !geomTick
                 if (geomTick) view.evaluateJavascript(GEOM_PROBE_JS, null)
@@ -1200,7 +1208,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     /** 沉浸式全屏：隐藏状态栏和导航栏 */
     private fun hideSystemUi() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
+            // 走 androidx 的兼容入口：系统那个 setDecorFitsSystemWindows 在 API 35 已标记过时
+            WindowCompat.setDecorFitsSystemWindows(window, false)
             window.insetsController?.apply {
                 hide(WindowInsets.Type.systemBars())
                 systemBarsBehavior =
@@ -1881,7 +1890,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private var legacyCacheCleared = false
 
     /**
-     * 把响应体还原成明文。有些 CDN（斗鱼的 shark2）无视 Accept-Encoding: identity
+     * 把响应体还原成明文。有些 CDN 无视 Accept-Encoding: identity
      * 照样回 gzip：把压缩字节当 JS 交给内核，内核按文本解析二进制，直接
      * Uncaught SyntaxError: Invalid or unexpected token，整段脚本作废（取流函数就这么丢的）。
      * 返回 null 表示这个编码解不了，交回内核自己走网络。
@@ -2182,7 +2191,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   ? ' preWrap=' + Math.round(fs.origW) + 'x' + Math.round(fs.origH)
                   : '';
                 var sizeLine = ' size=' + Math.round(r.width) + 'x' + Math.round(r.height) + pre;
-                // 地址全给：斗鱼的鉴权参数就在尾部，截了就看不出是哪个源
+                // 地址全给：鉴权参数往往在地址尾部，截了就看不出是哪个源
                 return 'v' + idx + tag +
                   '\n  attr=' + attr +
                   '\n  src=' + prop +
@@ -2302,7 +2311,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 if (v.videoWidth > 0) return 'frame';
                 return null;
               }
-              // 广告基本都是 mp4 直链（斗鱼/虎牙的正片是 MSE 或 m3u8/flv，不走 mp4 文件）。
+              // 广告基本都是 mp4 直链（直播正片通常是 MSE 或 m3u8/flv，不走 mp4 文件）。
               // 所以地址里带 .mp4 的一律不选，避免把广告铺满全屏。
               function isMp4Url(s) {
                 return /\.mp4(\?|#|&|$)/i.test(s || '');
@@ -2332,6 +2341,12 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   if (window.__tvSoundOn !== 1) {
                     if (!el.muted) el.muted = true;
                     if (el.hasAttribute && !el.hasAttribute('muted')) el.setAttribute('muted', '');
+                    return;
+                  }
+                  // 直播频道里被插进来的贴片广告（有限时长）不要出声。
+                  // 点播类频道从头就是有限时长，__tvWasLive 不是 1，不受影响。
+                  if (window.__tvWasLive === 1 && finiteDur(el)) {
+                    if (!el.muted) el.muted = true;
                     return;
                   }
                   if (el.muted) el.muted = false;
@@ -2577,6 +2592,22 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   ' dpr=' + (window.devicePixelRatio || 1) +
                   ' scale=' + ((window.visualViewport && window.visualViewport.scale) || 1));
               }
+              // 把除当前铺满那一路以外的 video 全部静音（只看状态，不改播放/暂停）
+              function muteOthers(cur) {
+                var off = function (v) {
+                  if (!v || v === cur) return;
+                  try { if (!v.muted) v.muted = true; } catch (e) {}
+                };
+                try {
+                  var all = document.querySelectorAll('video');
+                  for (var i = 0; i < all.length; i++) off(all[i]);
+                } catch (e) {}
+                // 影子根里的那些不在 document 里（attachShadow 拦截时登记的清单）
+                try {
+                  var sh = window.__tvShadowVids || [];
+                  for (var j = 0; j < sh.length; j++) off(sh[j]);
+                } catch (e) {}
+              }
               // 播放器可能会反复重写 video 的行内样式，每次都要重新落实
               function applyStyles(el) {
                 el.style.setProperty('position', 'static', 'important');
@@ -2693,9 +2724,14 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 return '1';
               }
 
+              // 铺满之外的其他 video（广告/预览流）一律静音：
+              // 声音闸门在揭幕时就打开了，EARLY_MUTE_JS 那条不再管新出现的元素，
+              // 而选片这边只要当前这路还活着就不换片，新插进来的广告会自己带着声音播。
+              if (cur && cur.el) muteOthers(cur.el);
+
               // 当前这个还在正常播：死也不换。
-              // 面积不能当判据——手机上同一路视频，量出来的面积跟桌面完全不同（虎牙的广告
-              // 容器在 WebView 里没缩，广告那个 1280x720 反而比直播的 800x450 大）。
+              // 面积不能当判据——同一路视频量出来的面积跟桌面完全不同（广告容器在
+              // WebView 里没缩，广告的 1280x720 反而比直播的 800x450 大）。
               // 只要现在这个画面是好的，就别让新冒出来的东西抢位；广告放完会自己停，
               // 到那时 curAlive 变假，下一段逻辑才把位置交给直播。
               // 不换就不会出现“广告 ↔ 直播”每秒来回跳、两路轮流出声。
@@ -2716,7 +2752,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   if (cur.el) {
                     // 旧的那一路只静音、不暂停：静音就没有两路声音，画面又被全屏容器盖着看不见。
                     // 暂停会让站点的广告系统认为“广告被打断”，转头再抢一次直播 ——
-                    // 虎牙那个循环（切广告→暂停广告→抢直播→切回）就是这么来的
+                    // 站点那种循环（切广告→暂停广告→抢直播→切回）就是这么来的
                     try { cur.el.muted = true; } catch (e) {}
                     cur.el.style.cssText = cur.css || '';
                     if (cur.parent) {
@@ -2734,6 +2770,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 window.__tvFs = { el: v, parent: newParent, next: newNext, css: newCss,
                   wrap: cur.wrap, origArea: candArea,
                   origW: candRect.width, origH: candRect.height };
+                // 这一台是直播（无限时长）：之后出现的有固定时长的东西当广告处理
+                if (!finiteDur(v)) window.__tvWasLive = 1;
                 syncMark(cur.wrap);
                 tryPlay(v);
                 console.log('[tvfs] switched video inside existing wrap');
@@ -2766,6 +2804,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
               state.wrap = wrap;
               window.__tvFs = state;
+              // 这一台是直播（无限时长）：之后出现的有固定时长的东西当广告处理
+              if (!finiteDur(v)) window.__tvWasLive = 1;
               // 部分页面不自动播放：明确调 play()，没起来再重试
               tryPlay(v);
               console.log('[tvfs] wrap largest playable video');
@@ -2773,8 +2813,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 临时诊断：把容器/视频/视口的几何数字打进日志，用来定位"容器偏上、下方一大块黑"。
-        // 只读不写，不改任何样式；移除时删掉这一整块和两处调用即可。
+        // 几何调试：把容器/视频/视口的几何数字打进日志，用来定位"容器偏上、下方一大块黑"。
+        // 只读不写，不改任何样式；开关是配置页「开发者调试」里的几何调试，默认关。
         val GEOM_PROBE_JS = """
             (function () {
               var s = window.__tvFs;

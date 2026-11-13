@@ -77,7 +77,7 @@
     </LinearLayout>
 
     <!-- 自适应字号要有个定死的框才知道该缩到多大，所以频道名给死高度 + 限死一行：
-         名字长（CCTV5+(央视影音) 这类）整体缩字号，不再往下顶 -->
+         名字长（带括号副名这类）整体缩字号，不再往下顶 -->
     <TextView
         android:id="@+id/infoTitle"
         android:layout_width="match_parent"
