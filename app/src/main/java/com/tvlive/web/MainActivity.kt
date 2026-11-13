@@ -1340,8 +1340,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             }
 
             /**
-             * 不加载网页的 CSS / 图片 / 字体等样式类资源（只拦 http/https 的网络请求，
-             * 本地 file:// 首页资源不受影响）。视频/JS 等一律放行。
+             * 不加载网页的图片 / 字体等资源（只拦 http/https 的网络请求，
+             * 本地 file:// 首页资源不受影响）。CSS / 视频 / JS 等一律放行：样式表不拦，
+             * 页面就不会变成无样式排版（那种状态下隐藏层全显形、懒加载也失去高度边界）。
              * 另外整域拦截统计/广告脚本，以及 sourcemap / manifest 这类对播放无用的资源。
              */
             override fun shouldInterceptRequest(
@@ -1349,7 +1350,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 request: WebResourceRequest?
             ): WebResourceResponse? {
                 // 两个开关各管一件事（开关都在配置页「开发者调试」）：
-                // blockStyle 只管“拦不拦样式类资源”，关掉它不让脚本缓存也跟着失效。
+                // blockStyle 只管“拦不拦图片/字体这类资源”（CSS 不在其中），
+                // 关掉它也不让脚本缓存跟着失效。
                 val blockStyle = ChannelStore.devFlag("blockStyle")
                 val url = request?.url ?: return null
                 if (url.scheme?.lowercase() != "http" && url.scheme?.lowercase() != "https") {
@@ -1375,7 +1377,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
                 // 关掉拦截时一律当成“不是样式类资源”：继续往下走脚本缓存那条路
                 val kind = if (!blockStyle) null else when {
-                    dest == "style" || dest == "image" || dest == "font" ||
+                    // style（CSS）不在拦截之列：页面没有样式表会变成无样式排版，
+                    // 省下那几十 KB 换来的是隐藏层全显形、懒加载无限追加
+                    dest == "image" || dest == "font" ||
                         dest == "manifest" -> dest
                     // 网站声明了资源类型且不在此列，放行
                     dest != null -> null
@@ -1849,7 +1853,6 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private fun kindByExtension(path: String?): String? {
         if (path == null) return null
         return when {
-            path.endsWith(".css") -> "style"
             path.endsWith(".map") -> "map"
             path.endsWith(".webmanifest") || path.endsWith(".manifest") -> "manifest"
             FONT_EXTS.any { path.endsWith(it) } -> "font"
@@ -2265,6 +2268,29 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             (function () {
               // 调试边界标记开关（由原生每次注入时下发，页面重新加载也会重给一遍）
               var DBG = window.__tvDbgFrame === 1;
+              // 页面自己的 View Transition：切换时会把整页快照画进 top layer 演一遍，
+              // 那一层连 popover 都盖得住 —— 表现就是铺满之后被页面/播放器外框闪一下。
+              // 换成直接执行回调的版本：页面走的还是同一套 DOM 更新，只是不再生成快照。
+              (function () {
+                try {
+                  if (window.__tvNoVT) return;
+                  window.__tvNoVT = 1;
+                  if (typeof document.startViewTransition !== 'function') return;
+                  var shim = function (cb) {
+                    var p = Promise.resolve().then(function () {
+                      if (typeof cb === 'function') return cb();
+                    });
+                    return {
+                      ready: p, finished: p, updateCallbackDone: p,
+                      skipTransition: function () {},
+                      types: { add: function () {}, has: function () { return false; },
+                        forEach: function () {} }
+                    };
+                  };
+                  try { Object.defineProperty(shim, 'name', { value: 'startViewTransition' }); } catch (e) {}
+                  document.startViewTransition = shim;
+                } catch (e) {}
+              })();
               // 这个 video 是不是真的在放画面：
               // 1) src 是 blob: 或媒体后缀（MSE / 直连流）
               // 2) 或者元素已经解出帧（videoWidth>0）——播放器把 MediaStream 挂到
@@ -2851,6 +2877,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   if (document.documentElement) document.documentElement.style.overflow = lock.html;
                   if (document.body) document.body.style.overflow = lock.body;
                 }
+
                 if (s.el) s.el.style.cssText = s.css || '';
                 if (s.wrap && s.wrap.parentNode) s.wrap.parentNode.removeChild(s.wrap);
                 if (s.el && s.parent) {

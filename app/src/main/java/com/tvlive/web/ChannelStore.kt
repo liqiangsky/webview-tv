@@ -391,7 +391,7 @@ object ChannelStore {
      * 存成一份 JSON 而不是一串布尔 key：加开关不用再动存储代码。
      */
     private val DEV_DEFAULTS = linkedMapOf(
-        // 不加载网页的 CSS / 图片 / 字体
+        // 不加载网页的图片 / 字体（CSS 照常加载）
         "blockStyle" to true,
         // 网页脚本走本地磁盘缓存
         "scriptCache" to true,
