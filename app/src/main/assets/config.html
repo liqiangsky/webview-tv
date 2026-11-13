@@ -555,30 +555,42 @@
     <div class="sec"><b>什么时候跑</b></div>
     <div class="hint" style="margin-top:0">
       脚本只跑在你点名绑定它的那个频道上；没绑定脚本的网页，页面里根本没有 <code>TV</code>。
-      同一段脚本会被反复执行，下面四种时机各跑一次：<br>
+      同一段脚本会被反复执行，下面几种时机各跑一次：<br>
       ① 页面加载完、DOM 建好；<br>
       ② 播放器铺满屏幕那一刻；<br>
       ③ 页面地址变了（站内换路由、同页跳转，每秒查一次）；<br>
-      ④ 你自己用 <code>TV.repeat(ms)</code> 定的节奏。<br><br>
-      所以脚本要能重复跑：只登记状态，有副作用的动作放进 <code>TV.once</code> 或自己的标记里。
+      ④ <code>TV.wait</code> 在等的东西还没出现时（自己重试，不用你写）。<br><br>
+      所以脚本要能重复跑：只登记状态，有副作用的动作放进 <code>TV.wait</code> 的回调里或自己的标记里。
       脚本抛的异常会被吞掉并记一行「脚本异常」，不会影响播放。
     </div>
 
-    <div class="sec"><b>接口</b><span class="sp"></span><span class="cnt">7 个</span></div>
+    <div class="sec"><b>闸门：什么时候才轮到播放</b></div>
+    <div class="hint" style="margin-top:0">
+      绑了脚本的页面，开头有一段「脚本时间」：应用不去接管页面里的 video（那时还是脚本正要切掉的
+      旧频道），也不揭幕、不开声。这一段结束的方式任选一种：<br>
+      • 你写完就不再等东西了：这一轮跑完、没再等东西，400 毫秒后自动放行；<br>
+      • 你要切台：<code>TV.pick(...)</code>，它自己压黑幕、点、报切完；<br>
+      • 自己点也行：<code>TV.wait(...)</code> 拿到入口后 <code>el.click()</code>，完事后不用写收尾。<br><br>
+      这段期间黑幕本来就是盖着的，所以脚本不用自己管黑幕。
+      一直重试却等不到目标元素也没关系：重复注入自己有限额（约 20 秒 / 120 轮），到点就停并记一行日志；
+      整段脚本时间最多 20 秒，之后强制放行开始正常起播，不会一直黑屏。
+    </div>
+
+    <div class="sec"><b>接口</b><span class="sp"></span><span class="cnt">5 个</span></div>
     <div class="group doc">
-      <div class="drow"><div class="dnm">TV.holdCover()</div>
-        <div class="ddesc">要开始页内切台了：先把黑幕压住，切的过程中不露旧画面和半成品。</div></div>
-      <div class="drow"><div class="dnm">TV.afterSwitch()</div>
-        <div class="ddesc">切完了：放开黑幕，应用重新接管全屏和播放，新流真的出首帧才渐显。
-          压太久（起播超时）会被强制放开并记一行日志。</div></div>
-      <div class="drow"><div class="dnm">TV.click(el)</div>
-        <div class="ddesc">先滚到可见再 <code>click()</code>，返回 <code>true</code>/<code>false</code>。
-          元素为空或点的时候抛错都只记日志，不会把异常抛回页面。</div></div>
-      <div class="drow"><div class="dnm">TV.once(key, fn)</div>
-        <div class="ddesc">同一个页面文档里只跑一次，适合初始化。页面重新加载后重新算，不是整个应用只一次。</div></div>
-      <div class="drow"><div class="dnm">TV.repeat(ms)</div>
-        <div class="ddesc">让应用每隔 <code>ms</code> 再执行一次脚本（200–60000），传 <code>0</code> 停。
-          站点渲染慢、自己换路由时不用干等上面那几种时机；重新加载页面后要重新设。</div></div>
+      <div class="drow"><div class="dnm">TV.pick(selector, index)</div>
+        <div class="ddesc">页内换频道一条龙：等到第 <code>index</code> 个入口出现，压黑幕、点它、
+          报「切完了」。地址里没序号时它自己收工，按页面默认的频道播。
+          入口一直不出现就重试到限额为止，不会无限等。</div></div>
+      <div class="drow"><div class="dnm">TV.wait(selector, fn, key)</div>
+        <div class="ddesc">等东西出现：还没有就每 <code>400ms</code> 再跑一次脚本；
+          出现后只调一次 <code>fn(元素数组)</code>（同一个页面里不会重复）。
+          第一个参数也可以是「返回元素或真假值的函数」，比如等播放器真的就绪。
+          想自己决定怎么切就用它，比如先点下拉再点选项。
+          <code>key</code> 可选，同一页面里多次 wait 不同东西时用来区分。</div></div>
+      <div class="drow"><div class="dnm">TV.param(name)</div>
+        <div class="ddesc">读地址里的参数：<code>?i=3</code> 和 <code>#/live?id=3</code> 都认，没有回 <code>null</code>。
+          一个站多个频道共用一段脚本时就靠它。</div></div>
       <div class="drow"><div class="dnm">TV.log(m)</div>
         <div class="ddesc">往运行日志写一行，频道行点「日志」能看到。排查脚本就用它，
           <code>console</code> 不会进日志面板。</div></div>
@@ -586,16 +598,46 @@
         <div class="ddesc">在电视屏幕底部提示一句，两秒后自己消失。</div></div>
     </div>
 
-    <div class="sec"><b>例子</b></div>
+    <div class="sec"><b>用法：该用 pick 还是 wait</b></div>
+    <div class="hint" style="margin-top:0">
+      两个都是「等页面长出来再动手」，区别是替你做完、还是只把元素交给你：<br>
+      • <code>TV.pick(选择器, 序号)</code>：入口就是列表里的第 N 项、点一下就切台 —— 一行写完；<br>
+      • <code>TV.wait(选择器, fn)</code>：点之前/之后还有别的步骤（先展开列表再点项），
+      或者要等的不是元素而是状态（播放器就绪、文字变了），就用它，动作自己写；<br>
+      • 页面默认就播对了、脚本只想记个日志：两个都不用。<br><br>
+      两者都自带重试和去重（同一页面同一个 wait 只执行一次回调、上限 20 秒 / 120 轮），
+      所以脚本里不用写循环、也不用写收尾语句。
+    </div>
+
+    <div class="sec"><b>例子：一个页面里换频道</b></div>
+    <pre class="codeblk">// 频道地址只差 ?i=N（从 0 开始），整段脚本就两行：
+TV.pick('#programMain .item', TV.param('i'));</pre>
+    <div class="hint">
+      <code>TV.pick</code> 已经把「等入口 → 压黑幕 → 点 → 报切完」包了：入口没渲染出来就自己重试，
+      地址里没有 <code>i</code> 就放过、按页面默认频道播，超出范围会记一行「没有第 N 个入口」。
+      同一个页面要按别的参数切台，换成 <code>TV.param('ch')</code> 即可；选择器换成那个站的入口就行。
+    </div>
+
+    <div class="sec"><b>例子：步骤多一点的切台</b></div>
+    <pre class="codeblk">// 比如要先点开「频道列表」才能看到入口：等列表按钮 → 点开 → 再等入口 → 点它
+var i = TV.param('i');
+if (i == null) return;              // 没带序号就不动页面
+TV.wait('#openList', function (els) {
+  els[0].click();                   // 展开列表
+  TV.wait('.item', function (items) {
+    items[+i].click();              // 点完就交回应用，不用写收尾
+  }, 'items');
+}, 'open');</pre>
+
+    <div class="sec"><b>例子：手写完整流程</b></div>
     <pre class="codeblk">// 一个网页里有很多频道：每个频道一条地址、只差 URL 参数，都绑这一段脚本；
 // 脚本读参数，自己去点该选的那一路
-var ch = new URLSearchParams(location.search).get('ch');   // 换成你的参数名
+var ch = TV.param('ch');          // 换成你的参数名
 if (ch != null) {
-  TV.holdCover();
-  var ok = TV.click(document.querySelector('换成第 ' + ch + ' 项的选择器'));
-  TV.log('切到第 ' + ch + ' 路：' + (ok ? '已点击' : '没找到入口'));
-  // 等页面把新流接上再放开，否则揭幕时可能还是旧画面
-  setTimeout(TV.afterSwitch, 800);
+  // 等入口渲染出来再点；只点一次由 wait 保证
+  TV.wait('.item', function (items) {
+    items[+ch].click();           // 后来交回应用：全屏、等新流真出首帧才揭幕
+  });
 } else {
   TV.log('地址里没有参数，按页面默认的频道播');
 }</pre>
@@ -604,9 +646,11 @@ if (ch != null) {
     <div class="hint">
       页面标题不可靠：很多站换台后 <code>title</code> 不变，判断「真的换了」要看画面或自己在脚本里记的状态，
       别只看 <code>title</code>。<br><br>
-      换一路就是重新加载一次页面（重新拉流、重新静音起播），比页内点一下慢；脚本要尽快点完、尽快
-      <code>TV.afterSwitch()</code>，别把黑幕压太久。<br><br>
-      起播阶段应用会把页面静音，等画面落定才开声；脚本不用管声音，也别拿「有没有声音」判断播没播起来。
+      换一路就是重新加载一次页面（重新拉流、重新静音起播），比页内点一下慢；脚本要尽快点完，
+      别自己写定时重试、把脚本时间拖满 20 秒。<br><br>
+      起播阶段应用会把页面静音，等画面落定才开声；脚本不用管声音，也别拿「有没有声音」判断播没播起来。<br><br>
+      脚本里想等某个元素出现再动手，直接用 <code>TV.wait(选择器, fn)</code>（内部就在重试），
+      拿到后干活就行；一直没出现就让限额把它停掉，别写死循环、也不用自己计时。
     </div>
   </div>
 </div>
@@ -622,7 +666,7 @@ if (ch != null) {
       <div class="frow"><label>名称</label><input id="scName" placeholder="江苏卫视" autocomplete="off"></div>
     </div>
     <textarea id="scCode" class="code" spellcheck="false" autocapitalize="off" autocorrect="off"
-      placeholder="var ch = new URLSearchParams(location.search).get('ch');&#10;if (ch != null) {&#10;  TV.holdCover();&#10;  TV.click(document.querySelector('换成第 ' + ch + ' 项的选择器'));&#10;  setTimeout(TV.afterSwitch, 800);&#10;}"></textarea>
+      placeholder="// 频道地址只差 ?i=N：等入口出现、点它、切完报一声，全交给 TV.pick&#10;TV.pick('换成入口的选择器', TV.param('i'));"></textarea>
     <div class="chips" style="margin:10px 14px 0">
       <button class="chip" id="scTpl">插入模板</button>
     </div>
@@ -1282,12 +1326,8 @@ if (ch != null) {
     var t = $('scCode');
     t.value = (t.value.trim() ? t.value.replace(/\s*$/, '') + '\n\n' : '') +
       '// 一个网页多个频道：每条频道一个地址、只差 URL 参数，都绑这一段脚本\n' +
-      'var ch = new URLSearchParams(location.search).get(\'ch\');   // 换成你的参数名\n' +
-      'if (ch != null) {\n' +
-      '  TV.holdCover();\n' +
-      '  TV.click(document.querySelector(\'换成本站第 \' + ch + \' 项的选择器\'));\n' +
-      '  setTimeout(TV.afterSwitch, 800);\n' +
-      '}\n';
+      '// 等入口出现 → 压黑幕 → 点它 → 报「切完」都由 TV.pick 包了；// 参数名换成你自己的\n' +
+      'TV.pick(\'换成本站第 N 项的选择器\', TV.param(\'i\'));\n';
     toast('模板已插入，改掉选择器再保存');
   };
 

@@ -133,6 +133,15 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // 否则会先露出旧频道的画面、再被脚本一切。
     private var scriptRanAt = 0L
     private var scriptUrl: String? = null        // 上次注入时的地址，用来发现 SPA 换路由
+    // 脚本闸门：合着的时候一律不去接管页面里的 video —— 那时画面还是脚本正要切掉的旧频道。
+    // 打开的条件是脚本说完了（afterSwitch / done / repeat(0)），或者它自己没再要求重复，
+    // 或者超时放弃（脚本写挂了不能一直黑屏）。
+    private var scriptGateOpen = false
+    private var scriptGateArmedAt = 0L           // 闸门合上的时刻，用来算超时
+    private var scriptRepeatStartedAt = 0L       // 第一次要求重复注入的时刻
+    private var scriptRepeatRounds = 0           // 已经重复注入了几轮
+    // 本轮注入里脚本有没有说「过会儿再跑」：没说就说明它这轮没事了，不用再轮
+    private var scriptRepeatAsked = false
 
     private val darkTint = ColorStateList.valueOf(0xFF0E0E10.toInt())
     private val whiteTint = ColorStateList.valueOf(0xFFFFFFFF.toInt())
@@ -287,6 +296,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private val videoWatch: Runnable = object : Runnable {
         override fun run() {
             if (customView != null) return
+            // 脚本闸门合着：脚本还在页内切台，这时的 video 是旧频道的，别去铺它
+            if (scriptBusy()) {
+                webView.postDelayed(this, 200)
+                return
+            }
             // 起播那次必须等黑幕在（没有黑幕就说明已经在播了）；进来以后的静默重铺
             // 没有黑幕，此时只要 liveEntered 就能继续干
             if (transitionCover == null && !liveEntered) return
@@ -432,11 +446,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 webView.postDelayed(this, 120)
                 return
             }
-            // 配了脚本的页面：等脚本至少跑过一轮（并给它几百毫秒发 holdCover）再揭幕。
-            // 只有配了脚本的页面才有这个等待，普通频道不受影响。
-            if (scriptCode != null &&
-                (scriptRanAt == 0L || SystemClock.uptimeMillis() - scriptRanAt < SCRIPT_GRACE_MS)
-            ) {
+            // 脚本闸门还合着：这一源可能马上就被脚本切掉，先不揭幕
+            if (scriptBusy()) {
                 webView.postDelayed(this, 120)
                 return
             }
@@ -480,6 +491,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private val fsWatch: Runnable = object : Runnable {
         override fun run() {
             if (!cssFullscreen) return
+            // 脚本闸门合着：别去改页面的全屏样式，等脚本换完流再说
+            if (scriptBusy()) {
+                webView.postDelayed(this, 500)
+                return
+            }
             val view = webView
             injectViewportSize()
             view.evaluateJavascript(applyFsJs(), null)
@@ -490,7 +506,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 val fresh = SiteScripts.forUrl(now)?.code
                 scriptCode = fresh
                 scriptRanAt = 0L
-                if (fresh != null) injectSiteScript()
+                if (fresh != null) {
+                    // 新路由可能又要切台：闸门重新合上，重新算超时
+                    resetScriptGate()
+                    injectSiteScript()
+                }
             }
             // 几何日志每秒一轮太吵，隔轮打一次（只在调试边界标记打开时）
             if (ChannelStore.devFlag("frameMarkers")) {
@@ -523,6 +543,14 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // 计时只在 openChannel 起一次，页面中途重定向/换源不再续表（有些页面会一直跳）
     private val coverTimeout = Runnable {
         playTimeoutArmed = false
+        // 脚本闸门还合着：脚本还在一轮轮试（还没说完成），这时没画面很正常，
+        // 不能当成「这个台起不来」，再给一轮时间
+        if (scriptBusy()) {
+            TvLog.d(TAG, "script gate closed, give it another round")
+            restartVideoWatch()
+            armPlayTimeout()
+            return@Runnable
+        }
         // 脚本一直压着黑幕却没报切换完成（脚本挂了/写错了）：放它走，
         // 宁可露出旧画面也不能一直黑着，更不能因此弹错误页
         if (scriptHoldCover) {
@@ -1486,6 +1514,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 scriptRanAt = 0L
                 scriptRepeatMs = 0
                 webView.removeCallbacks(scriptTick)
+                resetScriptGate()
                 if (isLivePage) {
                     // 新文档没有上一个文档的 window.__tvSoundOn，闸门自己就关上了；
                     // 原生这边也同步成静音，等这一页真出画面再开声（站内跳转也一样）
@@ -1762,10 +1791,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private val soundWatch: Runnable = object : Runnable {
         override fun run() {
             if (!webOpen || soundOn) return
-            if (scriptHoldCover ||
-                (scriptCode != null &&
-                    (scriptRanAt == 0L || SystemClock.uptimeMillis() - scriptRanAt < SCRIPT_GRACE_MS))
-            ) {
+            if (scriptHoldCover || scriptBusy()) {
                 webView.postDelayed(this, 200)
                 return
             }
@@ -1799,11 +1825,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             "toast" -> toast(obj.optString("m"))
             "repeat" -> armScriptRepeat(obj.optInt("ms", 0))
             "holdCover" -> holdCoverForScript()
-            "afterSwitch" -> {
-                // 脚本说切完了：放开黑幕，交给正常的首帧揭示流程（新流有帧才渐退）
-                scriptHoldCover = false
-                reassertFullscreen()
-            }
+            // 脚本说自己这轮干完了：开闸门，这之后才轮到接管画面
+            "afterSwitch", "done" -> openScriptGate("脚本报完成")
         }
     }
 
@@ -1815,25 +1838,112 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         val code = scriptCode ?: return
         if (!webOpen) return
         scriptRanAt = SystemClock.uptimeMillis()
+        scriptRepeatAsked = false
         webView.evaluateJavascript(
             TV_BOOT_JS + "\n(function(){try{\n" + code +
                 "\n}catch(e){window.TV.log('脚本异常: ' + (e && e.stack ? e.stack : e));}})();",
             null
         )
+        // 跑完若是没要求重复、也没要压黑幕，就当它这轮已经交差（不再白等到超时）
+        webView.removeCallbacks(scriptSettleTick)
+        webView.postDelayed(scriptSettleTick, SCRIPT_GRACE_MS)
     }
 
-    /** 脚本要求按自己的节奏重复注入（SPA 换路由、播放器异步渲染） */
+    /**
+     * 脚本要求按自己的节奏重复注入（SPA 换路由、播放器异步渲染）。
+     * ms <= 0 就是「不用再跑了」，等同于报完成：开闸门交给播放流程。
+     */
     private fun armScriptRepeat(ms: Int) {
         webView.removeCallbacks(scriptTick)
+        // 闸门已经开了（脚本报过完成 / 超时放行）：再要求重复也不理，
+        // 否则「说干完了」之后还能一轮轮接着跑，闸门就形同虚设
+        if (scriptGateOpen) return
         scriptRepeatMs = if (ms in 200..60_000) ms else 0
-        if (scriptRepeatMs > 0) webView.postDelayed(scriptTick, scriptRepeatMs.toLong())
+        if (scriptRepeatMs == 0) {
+            openScriptGate("脚本收工")
+            return
+        }
+        scriptRepeatAsked = true
+        if (scriptRepeatStartedAt == 0L) scriptRepeatStartedAt = SystemClock.uptimeMillis()
+        // 重复也得有个头：没等到目标元素的脚本不能永远往下跑
+        val tooMany =
+            SystemClock.uptimeMillis() - scriptRepeatStartedAt > SCRIPT_REPEAT_MAX_MS ||
+                scriptRepeatRounds >= SCRIPT_REPEAT_MAX_ROUNDS
+        if (tooMany) {
+            TvLog.d(TAG, "[tvscript] 重复注入到上限（$scriptRepeatRounds 轮），停")
+            openScriptGate("重复注入到上限")
+            return
+        }
+        webView.postDelayed(scriptTick, scriptRepeatMs.toLong())
     }
 
     private val scriptTick = object : Runnable {
         override fun run() {
-            if (scriptCode == null || scriptRepeatMs <= 0) return
+            if (scriptCode == null || scriptRepeatMs <= 0 || scriptGateOpen) return
+            scriptRepeatRounds++
             injectSiteScript()
-            webView.postDelayed(this, scriptRepeatMs.toLong())
+            if (scriptRepeatMs > 0) webView.postDelayed(this, scriptRepeatMs.toLong())
+        }
+    }
+
+    // ---------- 脚本闸门 ----------
+
+    /** 闸门合着：这一页配了脚本，而且脚本还没说它干完 */
+    private fun scriptBusy(): Boolean = scriptCode != null && !scriptGateOpen
+
+    /** 页面（或 SPA 新路由）开始：重新合上闸门、重置重试计数 */
+    private fun resetScriptGate() {
+        scriptGateOpen = false
+        scriptGateArmedAt = SystemClock.uptimeMillis()
+        scriptRepeatStartedAt = 0L
+        scriptRepeatRounds = 0
+        webView.removeCallbacks(scriptTick)
+        webView.removeCallbacks(scriptSettleTick)
+        webView.removeCallbacks(scriptGateTick)
+        TvLog.d(TAG, "[tvscript] 闸门重置 script=${scriptCode != null}")
+        if (scriptCode != null) webView.postDelayed(scriptGateTick, 500)
+    }
+
+    /**
+     * 开闸门：脚本这轮结束了（完成、还是放弃都算）。
+     * 到这里才真正接管画面：先放开脚本压的黑幕，再重新起一轮全屏/首帧/开声轮询。
+     */
+    private fun openScriptGate(reason: String) {
+        if (scriptGateOpen) return
+        scriptGateOpen = true
+        scriptRepeatMs = 0
+        webView.removeCallbacks(scriptTick)
+        webView.removeCallbacks(scriptSettleTick)
+        webView.removeCallbacks(scriptGateTick)
+        TvLog.d(TAG, "[tvscript] 开闸：$reason")
+        if (!webOpen) return
+        if (scriptHoldCover) {
+            scriptHoldCover = false
+            reassertFullscreen()
+        }
+        restartVideoWatch()
+    }
+
+    /**
+     * 注入后的一小段观察：这一轮没要「过会儿再跑」、也没压黑幕，就是脚本干完了。
+     * 看的是本轮有没有重新要重试，而不是定时器是不是还在（余留的下一拍不算数）。
+     */
+    private val scriptSettleTick = Runnable {
+        if (scriptGateOpen || scriptCode == null || !webOpen) return@Runnable
+        if (scriptHoldCover || scriptRepeatAsked) return@Runnable
+        openScriptGate("脚本这一轮没事了")
+    }
+
+    /** 闸门兜底：脚本一直不说完成（写挂了 / 选择器不对），到点放行 */
+    private val scriptGateTick = object : Runnable {
+        override fun run() {
+            if (scriptGateOpen || scriptCode == null || !webOpen) return
+            if (SystemClock.uptimeMillis() - scriptGateArmedAt < SCRIPT_GATE_MAX_MS) {
+                webView.postDelayed(this, 500)
+                return
+            }
+            TvLog.d(TAG, "[tvscript] 脚本超时未完成，放行")
+            openScriptGate("等脚本超时")
         }
     }
 
@@ -3053,8 +3163,13 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 配了脚本的页面：脚本跑完后再等这么久才允许揭幕（给 holdCover 一个到达的窗口）
-        const val SCRIPT_GRACE_MS = 300L
+        // 脚本注入后观察这么久：没要重复、没压黑幕就当它交差了（也给 holdCover 一个到达的窗口）
+        const val SCRIPT_GRACE_MS = 400L
+        // 闸门最多关这么久：脚本写挂了、选择器不对，也不能让画面一直等着
+        const val SCRIPT_GATE_MAX_MS = 20_000L
+        // 重复注入自己的上限：到时间或到轮数就停，别再往下跑
+        const val SCRIPT_REPEAT_MAX_MS = 20_000L
+        const val SCRIPT_REPEAT_MAX_ROUNDS = 120
 
         /**
          * 注入到页面里的 TV 接口。应用只提供这层通用能力，找元素/点按钮全在用户脚本里。
@@ -3065,28 +3180,61 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             (function () {
               var api = window.TV && window.TV.__tv ? window.TV : {};
               function post(o) { try { TVNative.send(JSON.stringify(o)); } catch (e) {} }
-              api.__tv = 1;
-              api.log = function (m) { post({ t: 'log', m: String(m) }); };
-              api.toast = function (m) { post({ t: 'toast', m: String(m) }); };
-              // 让应用按这个节奏重复执行脚本（页面渲染慢、SPA 换路由时用）
-              api.repeat = function (ms) { post({ t: 'repeat', ms: ms | 0 }); };
-              // 要开始页内切台了：先把黑幕压住，切台中间不露旧画面/半成品
-              api.holdCover = function () { post({ t: 'holdCover' }); };
-              // 切完了：放开黑幕，应用重新接管播放（新流有首帧才渐退）
-              api.afterSwitch = function () { post({ t: 'afterSwitch' }); };
-              // 只跑一次：脚本会被多次注入（DOM 就绪 / 播放器就绪 / 地址变化），
-              // 有副作用的初始化放这里
-              api.once = function (key, fn) {
+              // 下面几个只在脚本里用，不对外暴露（对外只留常用的几个）
+              function finish() { post({ t: 'done' }); }
+              function once(key, fn) {
                 window.__tvOnce = window.__tvOnce || {};
                 if (window.__tvOnce[key]) return;
                 window.__tvOnce[key] = 1;
-                try { fn(); } catch (e) { api.log('once 异常: ' + e); }
-              };
-              // 元素点击：滚到可见再点，失败只记日志，不抛给页面
-              api.click = function (el) {
-                if (!el) { api.log('click: 元素为空'); return false; }
+                try { fn(); } catch (e) { api.log('元素处理异常: ' + e); }
+              }
+              function click(el) {
                 try { if (el.scrollIntoView) el.scrollIntoView({ block: 'center' }); } catch (e) {}
                 try { el.click(); return true; } catch (e) { api.log('click 异常: ' + e); return false; }
+              }
+              // 切台前后的一对动作，只给 pick 用：压黑幕、切完放开
+              function holdCover() { post({ t: 'holdCover' }); }
+              function afterSwitch() { post({ t: 'afterSwitch' }); }
+              api.__tv = 1;
+              api.log = function (m) { post({ t: 'log', m: String(m) }); };
+              api.toast = function (m) { post({ t: 'toast', m: String(m) }); };
+              // 让应用再跑一轮（只给 wait 用，脚本自己不用管）
+              function retry(ms) { post({ t: 'repeat', ms: ms | 0 }); }
+              // 读地址里的参数：?i=3 和 #/live?id=3 都认，没有就是 null
+              api.param = function (name) {
+                function get(q) {
+                  try { return new URLSearchParams(q).get(name); } catch (e) { return null; }
+                }
+                var v = get(String(location.search || '').slice(1));
+                if (v != null) return v;
+                var h = String(location.hash || ''), at = h.indexOf('?');
+                return at >= 0 ? get(h.slice(at + 1)) : null;
+              };
+              // 等东西出现：参数是选择器，或者「返回元素/数组/真假值的函数」（等播放器就绪之类）
+              // 还没出现就稍后再跑一轮；出现后只调一次 fn(all)。重试有配额，写不出死循环。
+              api.wait = function (target, fn, key) {
+                var res = null;
+                try {
+                  res = typeof target === 'function' ? target()
+                    : [].slice.call(document.querySelectorAll(target));
+                } catch (e) { api.log('wait 异常: ' + e); }
+                if (res === true) res = [document];
+                if (res && !Array.isArray(res)) res = [res];
+                if (!res || !res.length) { retry(400); return false; }
+                once(key || ('wait:' + String(target).slice(0, 60)), function () { fn(res); });
+                return true;
+              };
+              // 页内切台一条龙：等到第 n 个入口，压黑幕、点它、报切完
+              api.pick = function (selector, index, key) {
+                var n = index == null ? NaN : parseInt(index, 10);
+                if (isNaN(n)) { api.log('地址里没有序号'); finish(); return; }
+                api.wait(selector, function (all) {
+                  var el = all[n];
+                  if (!el) { api.log('没有第 ' + n + ' 个入口'); finish(); return; }
+                  holdCover();
+                  api.log('切到第 ' + n + ' 个入口');
+                  if (click(el)) afterSwitch(); else finish();
+                }, key || ('pick:' + selector + ':' + n));
               };
               window.TV = api;
             })();
