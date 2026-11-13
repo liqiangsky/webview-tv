@@ -2389,14 +2389,18 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               function applyVolume(el) {
                 if (!el) return;
                 try {
-                  if (window.__tvSoundOn !== 1) {
-                    if (!el.muted) el.muted = true;
-                    if (el.hasAttribute && !el.hasAttribute('muted')) el.setAttribute('muted', '');
-                    return;
-                  }
-                  // 直播频道里被插进来的贴片广告（有限时长）不要出声。
-                  // 点播类频道从头就是有限时长，__tvWasLive 不是 1，不受影响。
-                  if (window.__tvWasLive === 1 && finiteDur(el)) {
+                  // 规则只有一条：铺满的那一路要有声、音量 50%；其它一律静音。
+                  // 不再看「声音闸门」——那个门只在还没选片时用来压住页面先起播的东西，
+                  // 一旦已经选定这一路，它就是用户要听的东西，闸门开没开都不应该把它静音
+                  // （早先按闸门判断，闸门没来得及打开时全屏画面就一直静音、音量也没改）。
+                  var cur = window.__tvFs && window.__tvFs.el;
+                  if (!cur) {
+                    if (window.__tvSoundOn !== 1) {
+                      if (!el.muted) el.muted = true;
+                      if (el.hasAttribute && !el.hasAttribute('muted')) el.setAttribute('muted', '');
+                      return;
+                    }
+                  } else if (el !== cur) {
                     if (!el.muted) el.muted = true;
                     return;
                   }
@@ -2821,8 +2825,6 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 window.__tvFs = { el: v, parent: newParent, next: newNext, css: newCss,
                   wrap: cur.wrap, origArea: candArea,
                   origW: candRect.width, origH: candRect.height };
-                // 这一台是直播（无限时长）：之后出现的有固定时长的东西当广告处理
-                if (!finiteDur(v)) window.__tvWasLive = 1;
                 syncMark(cur.wrap);
                 tryPlay(v);
                 console.log('[tvfs] switched video inside existing wrap');
@@ -2855,8 +2857,6 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
               state.wrap = wrap;
               window.__tvFs = state;
-              // 这一台是直播（无限时长）：之后出现的有固定时长的东西当广告处理
-              if (!finiteDur(v)) window.__tvWasLive = 1;
               // 部分页面不自动播放：明确调 play()，没起来再重试
               tryPlay(v);
               console.log('[tvfs] wrap largest playable video');
