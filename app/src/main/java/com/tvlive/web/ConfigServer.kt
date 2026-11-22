@@ -446,8 +446,6 @@ class ConfigServer(
         val st = EpgManager.status()
         val custom = JSONArray()
         for (s in EpgManager.customSources()) custom.put(s)
-        val builtin = JSONArray()
-        for (s in EpgManager.builtinSources()) builtin.put(s)
         val missing = JSONArray()
         for (g in ChannelStore.groups()) {
             for (ch in g.channels) {
@@ -465,7 +463,6 @@ class ConfigServer(
             .put("names", st.names)
             .put("stamp", st.stamp)
             .put("custom", custom)
-            .put("builtin", builtin)
             .put("missing", missing)
         return JSONObject().put("ok", true).put("epg", epg).toString()
     }

@@ -30,16 +30,6 @@ import java.util.zip.GZIPInputStream
 object EpgManager {
     private const val TAG = "TvWeb"
 
-    // 第一个是用户指定源（每天更新，覆盖 今天 ~ 后天）。
-    // 前面的文件覆盖不到当前时间时，依次往后试公开镜像，直到拿到有当期节目的那份。
-    private val SOURCES = listOf(
-        "https://epg.zsdc.eu.org/t.xml.gz",
-        "https://epg.erw.cc/e.xml.gz",
-        "https://raw.githubusercontent.com/kuke31/xmlgz/main/e.xml.gz",
-        "https://live.fanmingming.com/e.xml",
-        "http://epg.112114.xyz/pp.xml.gz"
-    )
-
     private const val UPDATE_HOUR = 0
     private const val UPDATE_MIN = 25
     private const val FETCH_AGAIN = 6 * 3600_000L
@@ -88,7 +78,7 @@ object EpgManager {
 
     // ---------------- 节目源管理（配置页） ----------------
 
-    // 用户自己加的源存在这里，排在内置源前面先试；内置的都是公开镜像，不给删
+    // 节目单只认用户自己加的源：没配置就没有节目单，应用不内置、也不默认任何一路
     private const val KEY_SOURCES = "custom"
 
     private val prefs get() = app.getSharedPreferences("epg_source", Context.MODE_PRIVATE)
@@ -97,10 +87,8 @@ object EpgManager {
         prefs.getString(KEY_SOURCES, "").orEmpty().split('\n')
             .map { it.trim() }.filter { it.isNotEmpty() }
 
-    fun builtinSources(): List<String> = SOURCES
-
-    /** 实际尝试顺序：自定义的在前，内置的在后（去重） */
-    private fun allSources(): List<String> = (customSources() + SOURCES).distinct()
+    /** 尝试顺序：就按用户添加的顺序来 */
+    private fun allSources(): List<String> = customSources().distinct()
 
     /** 加一个自定义源；地址不合法或已经存在就返回 false */
     fun addSource(url: String): Boolean {
@@ -116,7 +104,26 @@ object EpgManager {
         val list = customSources()
         if (!list.contains(url)) return false
         prefs.edit().putString(KEY_SOURCES, list.filter { it != url }.joinToString("\n")).apply()
+        // 最后一个源也删掉了：之前下载的数据不再算数，直接清空
+        if (customSources().isEmpty() && ::app.isInitialized) {
+            if (::work.isInitialized) work.execute { clearGuide() } else clearGuide()
+        }
         return true
+    }
+
+    /**
+     * 没配置源就等于没有节目单：硬盘上旧的文件、内存里的表一起清掉。
+     * 只在 epg 线程上调用（磁盘和字段都不是线程安全的）。
+     */
+    private fun clearGuide() {
+        schedule = emptyMap()
+        keys = emptyMap()
+        coverageEnd = 0L
+        source = null
+        loaded = false
+        attempted = false
+        runCatching { dir.listFiles()?.forEach { it.delete() } }
+        main.post { onChanged?.invoke() }
     }
 
     /** 当前状态：配置页那几行字都用它 */
@@ -141,8 +148,13 @@ object EpgManager {
             work = Executors.newSingleThreadExecutor { r -> Thread(r, "epg").apply { isDaemon = true } }
         }
         work.execute {
-            parse()
-            if (needFetch()) fetch()
+            if (allSources().isEmpty()) {
+                Log.d(TAG, "epg: no source configured, guide stays empty")
+                clearGuide()
+            } else {
+                parse()
+                if (needFetch()) fetch()
+            }
             scheduleNextUpdate()
         }
     }
@@ -151,7 +163,12 @@ object EpgManager {
     fun refreshNow(context: Context, onDone: () -> Unit) {
         init(context)
         work.execute {
-            runCatching { fetch() }
+            if (allSources().isEmpty()) {
+                Log.d(TAG, "epg: no source configured, nothing to update")
+                clearGuide()
+            } else {
+                runCatching { fetch() }
+            }
             runCatching { scheduleNextUpdate() }
             onDone()
         }
@@ -171,9 +188,15 @@ object EpgManager {
 
     private fun fetch(): Boolean {
         if (fetching) return false
+        val sources = allSources()
+        // 没配置源就不用跑：节目单就是空的，别去碰网络
+        if (sources.isEmpty()) {
+            Log.d(TAG, "epg: no source configured, skip fetch")
+            return false
+        }
         fetching = true
         try {
-            for (url in allSources()) {
+            for (url in sources) {
                 if (!download(url)) continue
                 runCatching { File(dir, "stamp.txt").writeText(System.currentTimeMillis().toString()) }
                 parse()
