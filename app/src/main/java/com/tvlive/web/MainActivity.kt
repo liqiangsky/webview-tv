@@ -101,6 +101,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private var playTimeoutArmed = false     // 起播超时是否已排期（一次点台只计一次时）
     private var panelOpen = false
     private var openKeyUp = false        // 呼出面板那一下按键的 UP 需要吃掉
+    private var exitArmed = false         // 返回键已按过一次：两秒内再按才真退
+    private val exitDisarm = Runnable { exitArmed = false }
 
     // 频道列表的重建条件：分组、数据版本、在播行号，三者都没变就不必重搭
     private var listVersion = 0
@@ -157,6 +159,12 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     // 过渡动画遮罩：打开页面前盖上，网页视频全屏后渐进退出
     private var transitionCover: FrameLayout? = null
+    // 过渡黑幕正中那两行字（台名 / 「正在连接…」），建一次，后面切台只换内容
+    private var coverBox: View? = null
+    private var coverName: TextView? = null
+    private var coverHint: TextView? = null
+    private var coverDotFrame = 0
+    private var coverFailed = false    // 黑幕现在展示的是错误文案，不是“正在连接”
 
     // 页面里的 blob 视频是否已经铺满屏幕（CSS 全屏）
     private var cssFullscreen = false
@@ -586,11 +594,28 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         webView.removeCallbacks(coverTimeout)
     }
 
-    /** 起播超时：先掐掉起不来的网页（释放它的播放器/解码器/JS 堆），再显示本地错误页 */
-    private fun showPlayError() {
+    /** 起播超时：先掐掉起不来的网页（释放它的播放器/解码器/JS 堆），再把黑幕改成错误屏 */
+    private fun showPlayError() = showErrorScreen(PLAY_ERROR_TEXT, "按 OK 键呼出频道列表换台")
+
+    /**
+     * 起不来 / 加载失败的错误屏：不再往 WebView 里塞一张本地网页——
+     * 那张页是另一套字号配色，跟“正在连接”的黑幕对不上，还得跟着网页一起加载、白闪。
+     * 直接把过渡黑幕改成错误屏：标题写在台名的位置，下面一行写去处，就这两行字。
+     */
+    private fun showErrorScreen(title: String, hint: String) {
         webView.stopLoading()
-        hideTransitionCover()
-        webView.loadUrl("$ERROR_URL?msg=" + Uri.encode(PLAY_ERROR_TEXT))
+        webView.removeCallbacks(videoWatch)
+        webView.removeCallbacks(frameWatch)
+        disarmPlayTimeout()
+        coverFailed = true
+        val cover = transitionCover ?: newTransitionCover()
+        cover.animate().cancel()
+        cover.alpha = 1f
+        coverHint?.removeCallbacks(coverDots)
+        coverName?.text = title
+        coverHint?.text = hint
+        syncCoverText()
+        TvLog.d(TAG, "error screen: $title")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1167,7 +1192,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
      */
     private fun showPanel() {
         if (panelOpen || groups.isEmpty()) return
+        // 面板一开，刚才那下返回的「退出确认」就算过期：收起面板回来再按，要重新提示
+        webView.removeCallbacks(exitDisarm)
+        exitArmed = false
         panelOpen = true
+        syncCoverText()
         panelRoot.animate().cancel()
         syncBackdropBlur()
         restoreFocus()
@@ -1193,6 +1222,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         if (!panelOpen) return
         if (panelRoot.visibility != View.VISIBLE) { panelOpen = false; return }
         panelOpen = false
+        syncCoverText()
         renderInfo(null)
         persistFocus()
         panelRoot.animate().cancel()
@@ -1232,6 +1262,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         scriptHoldCover = false
         scriptRepeatMs = 0
         playTimeoutArmed = false   // 新台重新计时：showTransitionCover 里才会真的排期
+        coverFailed = false        // 上一个台的错误屏不在新台接着用
         showTransitionCover()
         webView.visibility = View.VISIBLE
         webView.requestFocus()
@@ -1555,7 +1586,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 val isMainHttpFrame = request?.isForMainFrame == true &&
                     request.url.scheme?.startsWith("http") == true
                 if (isMainHttpFrame) {
-                    view?.loadUrl(ERROR_URL)
+                    showErrorScreen("页面加载失败", "网络可能不通，或该网站拒绝了访问。按 OK 键呼出频道列表换台")
                 }
             }
 
@@ -1610,6 +1641,17 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 hideCustomView()
                 return true
             }
+            // 二次退出：遥控器按一下返回就关掉整个台太容易误触，第一次只给一句话，
+            // 两秒内再按一次才真退。不弹确认框——退出是个罕见动作，为它停下来用光标选一次不值当。
+            if (!exitArmed) {
+                exitArmed = true
+                toast("再按一次返回退出")
+                webView.removeCallbacks(exitDisarm)
+                webView.postDelayed(exitDisarm, EXIT_CONFIRM_MS)
+                return true
+            }
+            webView.removeCallbacks(exitDisarm)
+            exitArmed = false
             finish()
             return true
         }
@@ -1740,28 +1782,98 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         // 黑幕可能还压着上一个起不来的页面：这里不能直接 return，
         // 必须重新起轮询（超时已排过就不重排，计时始终从点台那一下算），
         // 否则新页面能播也永远等不到首帧探测，黑幕一直盖着
-        val cover = transitionCover ?: FrameLayout(this).apply {
-            setBackgroundColor(0xFF000000.toInt())
-            alpha = 0f
-        }.also {
-            // 插到频道面板之下：加载期间面板仍可呼出操作，网页画面被黑幕挡住
-            val root = findViewById<FrameLayout>(R.id.root)
-            root.addView(it, root.indexOfChild(panelRoot),
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            )
-            // 一进来就是全黑遮罩（不露出正在加载的网页），只在退出时渐隐
-            it.alpha = 1f
-            transitionCover = it
-        }
+        // 已经判成起不来：别再把它翻回“正在连接”，错误文案留到下次点台（openChannel 会解掉）
+        if (coverFailed) return
+        val cover = transitionCover ?: newTransitionCover()
+        // 黑幕会被连着换台复用：台名换成这次要进的，省略号重新跑一轮
+        coverName?.text = playingChannel()?.name?.takeIf { it.isNotBlank() } ?: "正在切换频道"
+        coverHint?.removeCallbacks(coverDots)
+        coverHint?.text = "正在连接"
+        coverDotFrame = 0
+        coverHint?.postDelayed(coverDots, 450)
         cover.animate().cancel()
         cover.alpha = 1f
+        syncCoverText()
         settlingSince = 0L
         // 开始盯页面里的 blob 视频（先清掉可能在旧实例上排队的同一轮询，避免叠成多份）
         restartVideoWatch()
         armPlayTimeout()
+    }
+
+    /** 建一层过渡黑幕（中央带台名/提示），插到频道面板之下 */
+    private fun newTransitionCover(): FrameLayout {
+        val cover = FrameLayout(this).apply {
+            setBackgroundColor(0xFF000000.toInt())
+            // 一进来就是全黑遮罩（不露出正在加载的网页），只在退出时渐隐
+            alpha = 1f
+        }
+        buildCoverContent(cover)
+        // 插到频道面板之下：加载期间面板仍可呼出操作，网页画面被黑幕挡住
+        val root = findViewById<FrameLayout>(R.id.root)
+        root.addView(cover, root.indexOfChild(panelRoot),
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        transitionCover = cover
+        return cover
+    }
+
+    /**
+     * 黑幕正中的内容：台名 → 「正在连接…」。
+     * 只留字，不加进度条/横线：动静只给省略号，切台那几秒看着安静一些。
+     */
+    private fun buildCoverContent(cover: FrameLayout) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.CENTER }
+        }
+        val name = TextView(this).apply {
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 26f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+        }
+        val hint = TextView(this).apply {
+            setTextColor(0xFF8E8E93.toInt())
+            textSize = 15f
+            gravity = Gravity.CENTER
+        }
+        box.addView(name, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        box.addView(hint, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(12) })
+        cover.addView(box)
+        coverBox = box
+        coverName = name
+        coverHint = hint
+    }
+
+    /**
+     * 面板开着的时候把黑幕上的字收起来：黑幕在面板下层，面板又是半透明的，
+     * 字透上来会糊在频道列表上。字是给“只有一片黑”准备的，面板一收自然会露出来。
+     */
+    private fun syncCoverText() {
+        coverBox?.visibility = if (panelOpen) View.GONE else View.VISIBLE
+    }
+
+    /** 「正在连接」后面那几个点：不写死成动画字库，按帧加一个，回到原点再走一遍 */
+    private val coverDots = object : Runnable {
+        override fun run() {
+            val hint = coverHint ?: return
+            coverDotFrame = (coverDotFrame + 1) % 4
+            hint.text = "正在连接" + ".".repeat(coverDotFrame)
+            hint.postDelayed(this, 450)
+        }
     }
 
     /** 开始/重开铺满轮询：先清掉可能在队列里的同一轮，避免叠成多份 */
@@ -1985,6 +2097,12 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private fun hideTransitionCover() {
         val cover = transitionCover ?: return
         transitionCover = null
+        // 黑幕要走了：省略号也停，别在后台空转
+        coverHint?.removeCallbacks(coverDots)
+        coverBox = null
+        coverName = null
+        coverHint = null
+        coverFailed = false
         TvLog.d(TAG, "cover fade out")
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
@@ -2245,9 +2363,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     companion object {
         const val TAG = "TvWeb"
-        const val ERROR_URL = "file:///android_asset/error.html"
 
-        // 起播超时：点台后这么久还没等到视频首帧，就关掉网页显示错误页
+        // 起播超时：点台后这么久还没等到视频首帧，就把黑幕改成错误屏
         const val PLAY_TIMEOUT_MS = 15_000L
         // 首帧到位后黑幕最多再压这么久等容器停稳：页面缩放一般一两拍内就收敛了
         const val FRAME_SETTLE_MS = 1_200L
@@ -3162,6 +3279,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               return JSON.stringify(out);
             })();
         """
+
+        // 退出确认的窗口：按一次返回后这么久没再按就当没按过，防止隔天再按一下就退出
+        const val EXIT_CONFIRM_MS = 2_000L
 
         // 脚本注入后观察这么久：没要重复、没压黑幕就当它交差了（也给 holdCover 一个到达的窗口）
         const val SCRIPT_GRACE_MS = 400L
