@@ -35,6 +35,8 @@ class TvApp : Application() {
         super.onCreate()
         instance = this
         ChannelStore.init(this)
+        // 站点脚本：用户自己写的页内 JS，按网址匹配，应用本身不含任何站点逻辑
+        SiteScripts.init(this)
         config = ConfigServer(
             CONFIG_PORT, this,
             hostProvider = { host },

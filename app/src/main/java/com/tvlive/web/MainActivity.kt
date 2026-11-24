@@ -18,6 +18,7 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -35,6 +36,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import org.json.JSONTokener
@@ -45,6 +47,8 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.Date
 import java.util.concurrent.Executors
+import java.util.zip.GZIPInputStream
+import java.util.zip.InflaterInputStream
 
 /**
  * Android TV 直播网页播放器（沉浸式频道面板）：
@@ -78,6 +82,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private lateinit var infoTitle: TextView
     private lateinit var infoState: TextView
     private lateinit var infoQuality: TextView
+    private lateinit var infoSource: TextView
     private lateinit var infoClock: TextView
     private lateinit var infoDate: TextView
     private lateinit var infoNow: TextView
@@ -96,6 +101,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private var playTimeoutArmed = false     // 起播超时是否已排期（一次点台只计一次时）
     private var panelOpen = false
     private var openKeyUp = false        // 呼出面板那一下按键的 UP 需要吃掉
+    private var exitArmed = false         // 返回键已按过一次：两秒内再按才真退
+    private val exitDisarm = Runnable { exitArmed = false }
 
     // 频道列表的重建条件：分组、数据版本、在播行号，三者都没变就不必重搭
     private var listVersion = 0
@@ -109,6 +116,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     // 当前页面地址：后台下载脚本时充当 Referer，尽量复现页面自己的那次请求
     @Volatile private var docUrl: String? = null
+    // 当前频道的域名。docUrl 要等 onPageStarted 才有，而页面一开始加载就有脚本在请求，
+    // 那一批要是按脚本自己的域名成组，缓存页就会多出一堆 CDN 分组（见 cacheEntry）
+    @Volatile private var livePageHost: String? = null
 
     // 频道数据（按分组）与浏览状态（与播放状态解耦）
     private var groups: List<Group> = emptyList()
@@ -116,6 +126,27 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private val listIndexByGroup = HashMap<Int, Int>()
     private var playingLine = -1              // 正在播放频道所在文件行号
     private var lastGroupNavAt = 0L           // 左右切组防抖
+
+    // ---------- 站点脚本（用户自己写的页内 JS）----------
+    // 当前页面匹配到的脚本正文；null 表示这个站没脚本，脚本通道全部关着
+    private var scriptCode: String? = null
+    private var scriptRepeatMs = 0            // 脚本要求的重复注入间隔（0 = 只注入一次）
+    // 脚本压着黑幕：页内切台正在发生，黑幕不能按"旧画面有帧"就提前扬了，
+    // 得等脚本自己说切完了（TV.afterSwitch）才走正常的首帧揭示流程
+    private var scriptHoldCover = false
+    // 这次页面里脚本已注入的时间戳（0 = 还没跑过）。配了脚本的页面要先让它跑完再揭幕，
+    // 否则会先露出旧频道的画面、再被脚本一切。
+    private var scriptRanAt = 0L
+    private var scriptUrl: String? = null        // 上次注入时的地址，用来发现 SPA 换路由
+    // 脚本闸门：合着的时候一律不去接管页面里的 video —— 那时画面还是脚本正要切掉的旧频道。
+    // 打开的条件是脚本说完了（afterSwitch / done / repeat(0)），或者它自己没再要求重复，
+    // 或者超时放弃（脚本写挂了不能一直黑屏）。
+    private var scriptGateOpen = false
+    private var scriptGateArmedAt = 0L           // 闸门合上的时刻，用来算超时
+    private var scriptRepeatStartedAt = 0L       // 第一次要求重复注入的时刻
+    private var scriptRepeatRounds = 0           // 已经重复注入了几轮
+    // 本轮注入里脚本有没有说「过会儿再跑」：没说就说明它这轮没事了，不用再轮
+    private var scriptRepeatAsked = false
 
     private val darkTint = ColorStateList.valueOf(0xFF0E0E10.toInt())
     private val whiteTint = ColorStateList.valueOf(0xFFFFFFFF.toInt())
@@ -131,6 +162,12 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     // 过渡动画遮罩：打开页面前盖上，网页视频全屏后渐进退出
     private var transitionCover: FrameLayout? = null
+    // 过渡黑幕正中那两行字（台名 / 「正在连接…」），建一次，后面切台只换内容
+    private var coverBox: View? = null
+    private var coverName: TextView? = null
+    private var coverHint: TextView? = null
+    private var coverDotFrame = 0
+    private var coverFailed = false    // 黑幕现在展示的是错误文案，不是“正在连接”
 
     // 页面里的 blob 视频是否已经铺满屏幕（CSS 全屏）
     private var cssFullscreen = false
@@ -146,26 +183,94 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     // 调试浮层：把页面里每个 <video> 的 src / 状态显示在屏幕上（排查广告 video）
     private var debugOverlay: TextView? = null
-    private val debugWatch: Runnable = object : Runnable {
+
+    // 上一次下发给页面的几何标记开关：和当前值不一样就立刻重注入，不等切台
+    private var markersApplied: Boolean? = null
+
+    /**
+     * 开发者调试里那两个看得见的开关，每 700ms 对一次表：
+     * 视频状态浮层该出现的就建出来、该关的就撤掉；几何标记变了就把新值重新注入页面。
+     * 做成实时是因为排查时最怕“改了没反应，还得先切个台才能确认”。
+     */
+    private val devWatch: Runnable = object : Runnable {
         override fun run() {
-            val tv = debugOverlay ?: return
-            if (!webOpen) {
-                // 直播页没打开时不显示浮层（避免盖住原生首页）
-                tv.visibility = View.GONE
-                webView.postDelayed(this, 1000)
-                return
+            syncDevOverlay()
+            syncGeomMarkers()
+            webView.postDelayed(this, 700)
+        }
+    }
+
+    // 浮层一行能放几个字：用浮层自己的字体度量现算，不能写死。
+    // 写死的话换个字号/屏幕密度就错：给多了末尾被裁、给少了明明有地方也折行。
+    private fun overlayCols(tv: TextView): Int {
+        val paint = tv.paint
+        val charW = paint.measureText("0")
+        val avail = (tv.width - tv.paddingLeft - tv.paddingRight)
+            .takeIf { it > 0 }
+            ?: (resources.displayMetrics.widthPixels - tv.paddingLeft - tv.paddingRight)
+        if (charW <= 0f || avail <= 0) return 72
+        // 留一个字余量：等宽字体里个别字符（URL 里的斜杠/短横线）宽度不完全一样
+        return ((avail / charW).toInt() - 1).coerceAtLeast(20)
+    }
+
+    private fun syncDevOverlay() {
+        if (!ChannelStore.devFlag("videoOverlay")) {
+            debugOverlay?.let { tv ->
+                (tv.parent as? ViewGroup)?.removeView(tv)
+                debugOverlay = null
             }
-            tv.visibility = View.VISIBLE
-            webView.evaluateJavascript(DEBUG_INFO_JS) { result ->
-                if (result != null) {
-                    runCatching {
-                        tv.text = JSONTokener(result).nextValue() as String
-                        tv.bringToFront()
-                    }
+            return
+        }
+        val tv = debugOverlay ?: TextView(this).apply {
+            setBackgroundColor(0xCC000000.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
+            setTypeface(android.graphics.Typeface.MONOSPACE)
+            // 11sp + 等宽：一行装得下一条 video 的完整字段，不至于全折成两行
+            textSize = 11f
+            setLineSpacing(0f, 1.15f)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            visibility = View.GONE
+        }.also {
+            // 宽度必须占满屏幕：WRAP_CONTENT 会被量成比屏幕还宽的一行，
+            // 超出窗口的部分直接被裁掉（字段后半截就丢了），而不是折行
+            addContentView(
+                it,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM
+                )
+            )
+            debugOverlay = it
+        }
+        if (!webOpen) {
+            // 直播页没打开时不显示浮层（避免盖住原生首页）
+            tv.visibility = View.GONE
+            return
+        }
+        tv.visibility = View.VISIBLE
+        webView.evaluateJavascript(debugInfoJs(overlayCols(tv))) { result ->
+            if (result != null) {
+                runCatching {
+                    tv.text = JSONTokener(result).nextValue() as String
+                    tv.bringToFront()
                 }
             }
-            webView.postDelayed(this, 1000)
         }
+    }
+
+    private fun syncGeomMarkers() {
+        val on = ChannelStore.devFlag("frameMarkers")
+        if (markersApplied == on) return
+        // 页面还没开就等着：开页时 window.__tvDbgFrame 会被正常注入，下轮再对表
+        if (!webOpen) {
+            markersApplied = null
+            return
+        }
+        markersApplied = on
+        webView.evaluateJavascript(applyFsJs(), null)
+        if (on) webView.evaluateJavascript(GEOM_PROBE_JS, null)
+        TvLog.d(TAG, "几何调试：" + if (on) "开" else "关")
     }
 
     // ============================================================================
@@ -174,7 +279,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // openChannel(url)  —— 换台：重建 WebView（会话不复用）→ liveEntered=false
     //                      → showTransitionCover() 盖一次黑幕 → loadUrl
     //   ↓ 页面加载后由 onPageStarted 尽早注入 APPLY_FS_JS（不等整页加载完）
-    // APPLY_FS_JS       —— pickVideo()：在 document + 同源 iframe 里挑 src 可播
+    // APPLY_FS_JS       —— pickVideo()：在 document（含 open shadowRoot）里挑 src 可播
     //                      （blob: 或 m3u8/flv/mp4 等）且 getBoundingClientRect 面积最大的
     //                      <video>，塞进 #000 fixed 全屏容器、applyStyles 铺满、tryPlay 重试起播。
     //                      返回 '0'=还没找到可播的视频，'1'=已铺满。
@@ -195,23 +300,36 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // 不能拿来当新页面的状态（否则它会替新页面把轮询停掉、画面永远不铺满）
     private var webGen = 0
 
+    // 声音闸门：起播阶段一直是静音的（页面上先播的那个台不能出声），
+    // 等这一源真出画面、黑幕要掀开时才开
+    private var soundOn = false
+
     private val videoWatch: Runnable = object : Runnable {
         override fun run() {
             if (customView != null) return
+            // 脚本闸门合着：脚本还在页内切台，这时的 video 是旧频道的，别去铺它
+            if (scriptBusy()) {
+                webView.postDelayed(this, 200)
+                return
+            }
             // 起播那次必须等黑幕在（没有黑幕就说明已经在播了）；进来以后的静默重铺
             // 没有黑幕，此时只要 liveEntered 就能继续干
             if (transitionCover == null && !liveEntered) return
             val view = webView
             val gen = webGen
             injectViewportSize()
-            view.evaluateJavascript(APPLY_FS_JS) { result ->
+            view.evaluateJavascript(applyFsJs()) { result ->
                 if (gen != webGen) return@evaluateJavascript
                 if (result?.trim()?.trim('"') == "1") {
                     cssFullscreen = true
-                    Log.d(TAG, "blob video fullscreen applied")
+                    TvLog.d(TAG, "blob video fullscreen applied")
+                    // 播放器就绪这一刻再跑一次脚本：频道栏、当前频道名这时才真的在
+                    injectSiteScript()
                     view.removeCallbacks(videoWatch)
                     if (transitionCover != null) {
-                        if (DEBUG_FRAME_MARKERS) view.evaluateJavascript(GEOM_PROBE_JS, null)
+                        if (ChannelStore.devFlag("frameMarkers")) {
+                            view.evaluateJavascript(GEOM_PROBE_JS, null)
+                        }
                         // 等视频真正出第一帧再褪黑幕（不拍脑袋定时间）
                         view.removeCallbacks(frameWatch)
                         view.postDelayed(frameWatch, 80)
@@ -220,6 +338,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                         // 盯着播放器重写样式、换源换 video
                         view.removeCallbacks(fsWatch)
                         view.postDelayed(fsWatch, 1000)
+                        // 没黑幕也要等脚本先跑完，再把声音放出来
+                        view.removeCallbacks(soundWatch)
+                        view.postDelayed(soundWatch, 400)
                     }
                 }
             }
@@ -227,10 +348,120 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         }
     }
 
+    // 页面刚建立就把声音闸门挂上去。
+    // 一个页面上有多个频道时，站点自己的播放器可能比我们 400ms 后的第一轮全屏轮询
+    // 还早开始播第一个台——那一小段声音就是切台过渡里听到的“别的台在响”。
+    // 所以不等轮询：文档一建就盯住新增的 video/audio，闸门没开就静音。
+    // 只在闸门关着时生效（window.__tvSoundOn），开声之后不干预页面。
+    private val EARLY_MUTE_JS = """
+        (function () {
+          // Android WebView 的 UA-CH 固定汇报 mobile=true / platform=Android，换 UA 字符串也改不了；
+          // 只看 navigator.userAgentData.mobile 的站点就会直接跳到手机站。改成按桌面浏览器汇报。
+          try {
+            if (!window.__tvUaShim) {
+              window.__tvUaShim = 1;
+              var brands = [
+                { brand: 'Chromium', version: '156' },
+                { brand: 'Google Chrome', version: '156' },
+                { brand: 'Not?A_Brand', version: '24' }
+              ];
+              var meta = { mobile: false, platform: 'Windows', brands: brands };
+              meta.getHighEntropyValues = function (hints) {
+                var all = { architecture: 'x86', bitness: '64', model: '', platformVersion: '15.0.0',
+                  uaFullVersion: '156.0.0.0', fullVersionList: brands, wow64: false, mobile: false };
+                var out = {};
+                (hints || []).forEach(function (k) { if (k in all) out[k] = all[k]; });
+                return Promise.resolve(out);
+              };
+              meta.toJSON = function () {
+                return { brands: brands, mobile: false, platform: 'Windows' };
+              };
+              Object.defineProperty(navigator, 'userAgentData', {
+                configurable: true, get: function () { return meta; }
+              });
+              // 触摸能力同样按桌面报：电视没有触摸屏，WebView 却固定给 5 个触摸点、
+              // 指针算 coarse，站点拿这两条加屏幕尺寸就能判定成手机
+              try {
+                Object.defineProperty(navigator, 'maxTouchPoints', {
+                  configurable: true, get: function () { return 0; }
+                });
+              } catch (e) {}
+              try {
+                var rawMM = window.matchMedia;
+                if (rawMM && !rawMM.__tvPatched) {
+                  var mm = function (q) {
+                    if (typeof q === 'string' && q.indexOf('pointer') >= 0 && q.indexOf('coarse') < 0) {
+                      return {
+                        matches: true, media: q, onchange: null,
+                        addListener: function () {}, removeListener: function () {},
+                        addEventListener: function () {}, removeEventListener: function () {},
+                        dispatchEvent: function () { return false; }
+                      };
+                    }
+                    return rawMM.call(window, q);
+                  };
+                  mm.__tvPatched = 1;
+                  window.matchMedia = mm;
+                }
+              } catch (e) {}
+            }
+          } catch (e) {}
+          if (window.__tvMuteHook) return '1';
+          window.__tvMuteHook = 1;
+          function mute(el) {
+            try { if (window.__tvSoundOn !== 1 && !el.muted) el.muted = true; } catch (e) {}
+          }
+          function scan(root) {
+            if (!root || !root.querySelectorAll) return;
+            try {
+              var els = root.querySelectorAll('video, audio');
+              for (var i = 0; i < els.length; i++) mute(els[i]);
+            } catch (e) {}
+          }
+          scan(document);
+          try {
+            new MutationObserver(function (ms) {
+              for (var i = 0; i < ms.length; i++) {
+                var nodes = ms[i].addedNodes;
+                for (var j = 0; j < nodes.length; j++) {
+                  var n = nodes[j];
+                  if (!n || n.nodeType !== 1) continue;
+                  if (n.tagName === 'VIDEO' || n.tagName === 'AUDIO') mute(n);
+                  else scan(n);
+                }
+              }
+            }).observe(document.documentElement || document, { childList: true, subtree: true });
+          } catch (e) {}
+          // 播放器也可能自己把静音关掉再播：拦住 play 这一下
+          try {
+            var proto = HTMLMediaElement.prototype, rawPlay = proto.play;
+            proto.play = function () {
+              // 铺满之外的那一路（典型：直播起来之后才被插进来的广告）即使声音闸门已经打开
+              // 也不能出声，否则直播画面里会混进广告音
+              var cur = window.__tvFs && window.__tvFs.el;
+              if (cur && this !== cur) { try { this.muted = true; } catch (e) {} }
+              mute(this);
+              return rawPlay.apply(this, arguments);
+            };
+          } catch (e) {}
+          return '1';
+        })();
+    """
+
     // 等这一源连续交出画面帧，然后才淡入直播画面
     private val frameWatch: Runnable = object : Runnable {
         override fun run() {
             if (transitionCover == null) return
+            // 脚本还在页内切台：这时的"有帧"是旧频道的帧，扬了幕就是先给看旧频道再一跳
+            if (scriptHoldCover) {
+                webView.postDelayed(this, 120)
+                return
+            }
+            // 脚本闸门还合着：这一源可能马上就被脚本切掉，先不揭幕
+            if (scriptBusy()) {
+                webView.postDelayed(this, 120)
+                return
+            }
             val view = webView
             val gen = webGen
             view.evaluateJavascript(FRAME_READY_JS) { result ->
@@ -243,6 +474,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     "1" -> {
                         settlingSince = 0L
                         liveEntered = true
+                        // 目标台的画面已经在了：这时才开声音（起播阶段一直静音）
+                        setSoundOn(true)
                         hideTransitionCover()
                     }
                     // 画面到位但容器还在改尺寸：黑幕再压一会儿，露出来就是稳的。
@@ -250,9 +483,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     "2" -> {
                         if (settlingSince == 0L) settlingSince = SystemClock.uptimeMillis()
                         if (SystemClock.uptimeMillis() - settlingSince > FRAME_SETTLE_MS) {
-                            Log.d(TAG, "reveal after settle grace")
+                            TvLog.d(TAG, "reveal after settle grace")
                             settlingSince = 0L
                             liveEntered = true
+                            setSoundOn(true)
                             hideTransitionCover()
                         }
                     }
@@ -268,11 +502,29 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private val fsWatch: Runnable = object : Runnable {
         override fun run() {
             if (!cssFullscreen) return
+            // 脚本闸门合着：别去改页面的全屏样式，等脚本换完流再说
+            if (scriptBusy()) {
+                webView.postDelayed(this, 500)
+                return
+            }
             val view = webView
             injectViewportSize()
-            view.evaluateJavascript(APPLY_FS_JS, null)
-            // 临时诊断：每秒一轮太吵，隔轮打一次（只在调试边界标记打开时）
-            if (DEBUG_FRAME_MARKERS) {
+            view.evaluateJavascript(applyFsJs(), null)
+            // SPA 换路由不会触发新页面加载：地址变了就把脚本重新匹配、重新跑一次
+            val now = view.url
+            if (now != null && now != scriptUrl) {
+                scriptUrl = now
+                val fresh = SiteScripts.forUrl(now)?.code
+                scriptCode = fresh
+                scriptRanAt = 0L
+                if (fresh != null) {
+                    // 新路由可能又要切台：闸门重新合上，重新算超时
+                    resetScriptGate()
+                    injectSiteScript()
+                }
+            }
+            // 几何日志每秒一轮太吵，隔轮打一次（只在调试边界标记打开时）
+            if (ChannelStore.devFlag("frameMarkers")) {
                 geomTick = !geomTick
                 if (geomTick) view.evaluateJavascript(GEOM_PROBE_JS, null)
             }
@@ -302,8 +554,33 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // 计时只在 openChannel 起一次，页面中途重定向/换源不再续表（有些页面会一直跳）
     private val coverTimeout = Runnable {
         playTimeoutArmed = false
+        // 脚本闸门还合着：脚本还在一轮轮试（还没说完成），这时没画面很正常，
+        // 不能当成「这个台起不来」，再给一轮时间
+        if (scriptBusy()) {
+            TvLog.d(TAG, "script gate closed, give it another round")
+            restartVideoWatch()
+            armPlayTimeout()
+            return@Runnable
+        }
+        // 脚本一直压着黑幕却没报切换完成（脚本挂了/写错了）：放它走，
+        // 宁可露出旧画面也不能一直黑着，更不能因此弹错误页
+        if (scriptHoldCover) {
+            TvLog.d(TAG, "script held cover too long, release")
+            scriptHoldCover = false
+            restartVideoWatch()
+            return@Runnable
+        }
+        // 配了脚本但脚本一直没跑成（页面迟迟没加载完）：补注入一次、再给一轮时间。
+        // 不能因为脚本没跑就把这个台判成起不来。
+        if (scriptCode != null && scriptRanAt == 0L) {
+            TvLog.d(TAG, "play timeout, inject script late")
+            injectSiteScript()
+            restartVideoWatch()
+            armPlayTimeout()
+            return@Runnable
+        }
         if (customView == null && transitionCover != null) {
-            Log.d(TAG, "play timeout, show error page")
+            TvLog.d(TAG, "play timeout, show error page")
             showPlayError()
         }
     }
@@ -320,11 +597,28 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         webView.removeCallbacks(coverTimeout)
     }
 
-    /** 起播超时：先掐掉起不来的网页（释放它的播放器/解码器/JS 堆），再显示本地错误页 */
-    private fun showPlayError() {
+    /** 起播超时：先掐掉起不来的网页（释放它的播放器/解码器/JS 堆），再把黑幕改成错误屏 */
+    private fun showPlayError() = showErrorScreen(PLAY_ERROR_TEXT, "按 OK 键呼出频道列表换台")
+
+    /**
+     * 起不来 / 加载失败的错误屏：不再往 WebView 里塞一张本地网页——
+     * 那张页是另一套字号配色，跟“正在连接”的黑幕对不上，还得跟着网页一起加载、白闪。
+     * 直接把过渡黑幕改成错误屏：标题写在台名的位置，下面一行写去处，就这两行字。
+     */
+    private fun showErrorScreen(title: String, hint: String) {
         webView.stopLoading()
-        hideTransitionCover()
-        webView.loadUrl("$ERROR_URL?msg=" + Uri.encode(PLAY_ERROR_TEXT))
+        webView.removeCallbacks(videoWatch)
+        webView.removeCallbacks(frameWatch)
+        disarmPlayTimeout()
+        coverFailed = true
+        val cover = transitionCover ?: newTransitionCover()
+        cover.animate().cancel()
+        cover.alpha = 1f
+        coverHint?.removeCallbacks(coverDots)
+        coverName?.text = title
+        coverHint?.text = hint
+        syncCoverText()
+        TvLog.d(TAG, "error screen: $title")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -356,6 +650,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         infoTitle = findViewById(R.id.infoTitle)
         infoState = findViewById(R.id.infoState)
         infoQuality = findViewById(R.id.infoQuality)
+        infoSource = findViewById(R.id.infoSource)
         infoClock = findViewById(R.id.infoClock)
         infoDate = findViewById(R.id.infoDate)
         infoNow = findViewById(R.id.infoNow)
@@ -395,25 +690,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         renderInfo(null)
         infoPanel.postDelayed(clockTick, 20_000)
 
-        if (DEBUG_SHOW_VIDEO_INFO) {
-            val tv = TextView(this).apply {
-                setBackgroundColor(0xCC000000.toInt())
-                setTextColor(0xFFFFFFFF.toInt())
-                setTypeface(android.graphics.Typeface.MONOSPACE)
-                textSize = 14f
-                setPadding(dp(10), dp(8), dp(10), dp(8))
-            }
-            addContentView(
-                tv,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.BOTTOM or Gravity.START
-                )
-            )
-            debugOverlay = tv
-            webView.postDelayed(debugWatch, 1200)
-        }
+        // 开发者调试里那两个看得见的开关：浮层和几何标记都由这一条心跳实时对表
+        webView.postDelayed(devWatch, 1200)
     }
 
     // ---------- 遮罩：频道信息 / 频道列表 / 手机配置二维码 ----------
@@ -717,7 +995,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         infoTarget = target
         val playing = playingNow(target)
         infoTitle.text = target.name
+        // 清晰度和来源都是可选信息：有值才占位，空着不留空药丸
         infoQuality.text = target.quality
+        infoQuality.visibility = if (target.quality.isNotEmpty()) View.VISIBLE else View.GONE
+        infoSource.text = target.source
+        infoSource.visibility = if (target.source.isNotEmpty()) View.VISIBLE else View.GONE
         // 电视只有光标没有鼠标，信息栏必须说清这是“在播的台”还是“正在预览的台”
         infoState.text = if (playing) "正在播放" else "预览中"
         infoState.setBackgroundResource(
@@ -789,10 +1071,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private fun playingNow(ch: Channel) = playingLine >= 0 && ch.line == playingLine
 
     /** 在播频道。登录条目和配对条目没有行号（-1），未播放时也必须返回 null，否则会被误认成在播 */
-    private fun playingChannel(): Channel? =
-        if (playingLine < 0) null else
-            groups.asSequence().flatMap { it.channels.asSequence() }
-                .firstOrNull { it.line == playingLine }
+    private fun playingChannel(): Channel? {
+        if (playingLine < 0) return null
+        return groups.asSequence().flatMap { it.channels.asSequence() }
+            .firstOrNull { it.line == playingLine }
+    }
 
     /** 焦点所在频道（浏览位置）；该组还没记位置时退回首行 */
     private fun focusedChannel(): Channel? =
@@ -912,7 +1195,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
      */
     private fun showPanel() {
         if (panelOpen || groups.isEmpty()) return
+        // 面板一开，刚才那下返回的「退出确认」就算过期：收起面板回来再按，要重新提示
+        webView.removeCallbacks(exitDisarm)
+        exitArmed = false
         panelOpen = true
+        syncCoverText()
         panelRoot.animate().cancel()
         syncBackdropBlur()
         restoreFocus()
@@ -938,6 +1225,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         if (!panelOpen) return
         if (panelRoot.visibility != View.VISIBLE) { panelOpen = false; return }
         panelOpen = false
+        syncCoverText()
         renderInfo(null)
         persistFocus()
         panelRoot.animate().cancel()
@@ -970,10 +1258,21 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         if (webOpen) recreateWebView()
         webOpen = true
         liveEntered = false
+        // 先把这个台的域名记下：紧跟的 loadUrl 里那批脚本按它归档
+        livePageHost = hostOf(url)
+        // 新台重新静音：页面先自己期起播的那个频道不能出声，等黑幕要掀开时才开
+        soundOn = false
+        webView.removeCallbacks(soundWatch)
+        // 新台重新计时：上一站脚本压着的黑幕不能带过来
+        scriptHoldCover = false
+        scriptRepeatMs = 0
         playTimeoutArmed = false   // 新台重新计时：showTransitionCover 里才会真的排期
+        coverFailed = false        // 上一个台的错误屏不在新台接着用
         showTransitionCover()
         webView.visibility = View.VISIBLE
         webView.requestFocus()
+        // 配置页从频道行打开的日志从这里往后看，就是这一次播的
+        TvLog.record("▶ 播放 " + url)
         webView.loadUrl(url)
     }
 
@@ -987,6 +1286,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         old.removeCallbacks(videoWatch)
         old.removeCallbacks(frameWatch)
         old.removeCallbacks(fsWatch)
+        old.removeCallbacks(soundWatch)
         // 上一个台子的起播超时也要清：留着会在新页面加载中途把黑幕掀开
         old.removeCallbacks(coverTimeout)
         (customView?.parent as? ViewGroup)?.removeView(customView)
@@ -1014,6 +1314,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
         webView.removeCallbacks(fsWatch)
+        webView.removeCallbacks(soundWatch)
         webView.removeCallbacks(coverTimeout)
         if (cssFullscreen) exitCssFullscreen()
         webView.evaluateJavascript(PAUSE_MEDIA_JS, null)
@@ -1022,7 +1323,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     /** 沉浸式全屏：隐藏状态栏和导航栏 */
     private fun hideSystemUi() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
+            // 走 androidx 的兼容入口：系统那个 setDecorFitsSystemWindows 在 API 35 已标记过时
+            WindowCompat.setDecorFitsSystemWindows(window, false)
             window.insetsController?.apply {
                 hide(WindowInsets.Type.systemBars())
                 systemBarsBehavior =
@@ -1065,6 +1367,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             setAcceptThirdPartyCookies(webView, true)
         }
 
+        // 页面里 window.TV 的回调出口。注入的对象对页面里任何 JS 都可见，
+        // 所以真正的闸在 onScriptMessage：当前页面没匹配到脚本就一律不理
+        webView.addJavascriptInterface(TvBridge(), "TVNative")
+
         webView.webChromeClient = object : WebChromeClient() {
 
             /** 网页请求视频全屏（blob 播放器的全屏按钮或 JS requestFullscreen） */
@@ -1094,7 +1400,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 if (cover != null) {
                     hideTransitionCover()
                 } else {
-                    Log.d(TAG, "onShowCustomView")
+                    TvLog.d(TAG, "onShowCustomView")
                 // 没有过渡动画时：黑屏淡出兜底，避免页面元素闪现
                     val fade = FrameLayout(this@MainActivity).apply {
                         setBackgroundColor(0xFF000000.toInt())
@@ -1117,8 +1423,18 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 hideCustomView()
             }
 
+            /**
+             * 页面 console：一律进 logcat；配置页的日志区只留页面自己 log 的与未捕获异常，
+             * 否则光一屏浏览器警告就能把有用的播报冲掉。
+             */
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-                Log.d(TAG, "console: " + message.message())
+                val text = message.message()
+                Log.d(TAG, "console: $text")
+                // 只留两类：我们自己注入的脚本打的（都以 [ 开头）、以及页面里的未捕获异常。
+                // 站点自己的 console 输出很多，全收就会把播放事件淹了。
+                if (text.startsWith("[tv") || text.contains("Uncaught")) {
+                    TvLog.record("console: $text")
+                }
                 return true
             }
         }
@@ -1148,30 +1464,34 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             }
 
             /**
-             * 不加载网页的 CSS / 图片 / 字体等样式类资源（只拦 http/https 的网络请求，
-             * 本地 file:// 首页资源不受影响）。视频/JS 等一律放行。
+             * 不加载网页的图片 / 字体等资源（只拦 http/https 的网络请求，
+             * 本地 file:// 首页资源不受影响）。CSS / 视频 / JS 等一律放行：样式表不拦，
+             * 页面就不会变成无样式排版（那种状态下隐藏层全显形、懒加载也失去高度边界）。
              * 另外整域拦截统计/广告脚本，以及 sourcemap / manifest 这类对播放无用的资源。
              */
             override fun shouldInterceptRequest(
                 view: WebView?,
                 request: WebResourceRequest?
             ): WebResourceResponse? {
-                if (!BLOCK_STYLE_RESOURCES) return null
+                // 两个开关各管一件事（开关都在配置页「开发者调试」）：
+                // blockStyle 只管“拦不拦图片/字体这类资源”（CSS 不在其中），
+                // 关掉它也不让脚本缓存跟着失效。
+                val blockStyle = ChannelStore.devFlag("blockStyle")
                 val url = request?.url ?: return null
                 if (url.scheme?.lowercase() != "http" && url.scheme?.lowercase() != "https") {
                     return null
                 }
 
                 val host = url.host?.lowercase()
-                if (host != null && TRACKING_HOSTS.any { host == it || host.endsWith(".$it") }) {
-                    Log.d(TAG, "block tracking: $url")
+                if (blockStyle && host != null && TRACKING_HOSTS.any { host == it || host.endsWith(".$it") }) {
+                    TvLog.d(TAG, "block tracking: $url")
                     return emptyResponse("script")
                 }
 
                 // mp4 广告视频、ico 图标：页面不需要加载，直接回空响应拦掉
                 val ext = url.path?.lowercase() ?: ""
-                if (ext.endsWith(".mp4") || ext.endsWith(".ico")) {
-                    Log.d(TAG, "block asset: $url")
+                if (blockStyle && (ext.endsWith(".mp4") || ext.endsWith(".ico"))) {
+                    TvLog.d(TAG, "block asset: $url")
                     return emptyResponse(if (ext.endsWith(".ico")) "image" else "video")
                 }
 
@@ -1179,8 +1499,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     .firstOrNull { it.key.equals("Sec-Fetch-Dest", ignoreCase = true) }
                     ?.value?.lowercase()
 
-                val kind = when {
-                    dest == "style" || dest == "image" || dest == "font" ||
+                // 关掉拦截时一律当成“不是样式类资源”：继续往下走脚本缓存那条路
+                val kind = if (!blockStyle) null else when {
+                    // style（CSS）不在拦截之列：页面没有样式表会变成无样式排版，
+                    // 省下那几十 KB 换来的是隐藏层全显形、懒加载无限追加
+                    dest == "image" || dest == "font" ||
                         dest == "manifest" -> dest
                     // 网站声明了资源类型且不在此列，放行
                     dest != null -> null
@@ -1194,7 +1517,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                         (dest == null && (path?.endsWith(".js") == true || path?.endsWith(".mjs") == true))
                     val plainFile = url.query == null &&
                         (path?.endsWith(".js") == true || path?.endsWith(".mjs") == true)
-                    if (staticAsset && plainFile && SERVE_FROM_SCRIPT_CACHE && request.method == "GET") {
+                    if (staticAsset && plainFile && ChannelStore.devFlag("scriptCache") &&
+                        request.method == "GET"
+                    ) {
                         val origin = request.requestHeaders.entries
                             .firstOrNull { it.key.equals("Origin", ignoreCase = true) }?.value
                         cacheLookupOrFetch(url.toString(), origin)?.let { return it }
@@ -1218,8 +1543,22 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 webView.removeCallbacks(fsWatch)
                 val isLivePage = url != null && url.startsWith("http")
                 docUrl = if (isLivePage) url else null
+                if (isLivePage) hostOf(url)?.let { livePageHost = it }
                 pageInputBlocked = isLivePage
+                // 站点脚本：换页面重新匹配；这个站没脚本就把脚本通道全关掉
+                scriptCode = if (isLivePage) SiteScripts.forUrl(url)?.code else null
+                scriptUrl = url
+                scriptRanAt = 0L
+                scriptRepeatMs = 0
+                webView.removeCallbacks(scriptTick)
+                resetScriptGate()
                 if (isLivePage) {
+                    // 新文档没有上一个文档的 window.__tvSoundOn，闸门自己就关上了；
+                    // 原生这边也同步成静音，等这一页真出画面再开声（站内跳转也一样）
+                    soundOn = false
+                    webView.removeCallbacks(soundWatch)
+                    // 页面自己的播放器可能比全屏轮询先起播：文档一建就先把闸门挂上
+                    webView.evaluateJavascript(EARLY_MUTE_JS, null)
                     // 已经进入过就静默重铺：站内跳转 / 重定向 / 返回上一页都会走到这里，
                     // 新文档不会继承上一个文档的 window.__tvFs，不重新起轮询就再也没人
                     // 铺满屏幕了（画面裸着页面、只剩页面自己的布局）——切台快了最容易中。
@@ -1237,9 +1576,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 if (customView == null && !liveEntered && url != null && url.startsWith("http")) {
                     showTransitionCover()
                 }
+                // 站点脚本：加载完才注入，此时页面的 DOM 才建好
+                injectSiteScript()
                 // 诊断：报告页面里 video 元素状态与全屏调用结果
                 view?.evaluateJavascript(PROBE_JS) { result ->
-                    Log.d(TAG, "probe: $result")
+                    TvLog.d(TAG, "probe: $result")
                 }
             }
 
@@ -1251,7 +1592,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 val isMainHttpFrame = request?.isForMainFrame == true &&
                     request.url.scheme?.startsWith("http") == true
                 if (isMainHttpFrame) {
-                    view?.loadUrl(ERROR_URL)
+                    showErrorScreen("页面加载失败", "网络可能不通，或该网站拒绝了访问。按 OK 键呼出频道列表换台")
                 }
             }
 
@@ -1306,6 +1647,17 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 hideCustomView()
                 return true
             }
+            // 二次退出：遥控器按一下返回就关掉整个台太容易误触，第一次只给一句话，
+            // 两秒内再按一次才真退。不弹确认框——退出是个罕见动作，为它停下来用光标选一次不值当。
+            if (!exitArmed) {
+                exitArmed = true
+                toast("再按一次返回退出")
+                webView.removeCallbacks(exitDisarm)
+                webView.postDelayed(exitDisarm, EXIT_CONFIRM_MS)
+                return true
+            }
+            webView.removeCallbacks(exitDisarm)
+            exitArmed = false
             finish()
             return true
         }
@@ -1324,7 +1676,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         hideSystemUi()
         if (cssFullscreen) webView.post {
             injectViewportSize()
-            webView.evaluateJavascript(APPLY_FS_JS, null)
+            webView.evaluateJavascript(applyFsJs(), null)
         }
         // 前台才接配置服务的界面动作；退到后台让给登录页或干脆无人应答
         TvApp.instance.host = this
@@ -1436,35 +1788,308 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         // 黑幕可能还压着上一个起不来的页面：这里不能直接 return，
         // 必须重新起轮询（超时已排过就不重排，计时始终从点台那一下算），
         // 否则新页面能播也永远等不到首帧探测，黑幕一直盖着
-        val cover = transitionCover ?: FrameLayout(this).apply {
-            setBackgroundColor(0xFF000000.toInt())
-            alpha = 0f
-        }.also {
-            // 插到频道面板之下：加载期间面板仍可呼出操作，网页画面被黑幕挡住
-            val root = findViewById<FrameLayout>(R.id.root)
-            root.addView(it, root.indexOfChild(panelRoot),
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            )
-            // 一进来就是全黑遮罩（不露出正在加载的网页），只在退出时渐隐
-            it.alpha = 1f
-            transitionCover = it
-        }
+        // 已经判成起不来：别再把它翻回“正在连接”，错误文案留到下次点台（openChannel 会解掉）
+        if (coverFailed) return
+        val cover = transitionCover ?: newTransitionCover()
+        // 黑幕会被连着换台复用：台名换成这次要进的，省略号重新跑一轮
+        coverName?.text = playingChannel()?.name?.takeIf { it.isNotBlank() } ?: "正在切换频道"
+        coverHint?.removeCallbacks(coverDots)
+        coverHint?.text = "正在连接"
+        coverDotFrame = 0
+        coverHint?.postDelayed(coverDots, 450)
         cover.animate().cancel()
         cover.alpha = 1f
+        syncCoverText()
         settlingSince = 0L
         // 开始盯页面里的 blob 视频（先清掉可能在旧实例上排队的同一轮询，避免叠成多份）
         restartVideoWatch()
         armPlayTimeout()
     }
 
+    /** 建一层过渡黑幕（中央带台名/提示），插到频道面板之下 */
+    private fun newTransitionCover(): FrameLayout {
+        val cover = FrameLayout(this).apply {
+            setBackgroundColor(0xFF000000.toInt())
+            // 一进来就是全黑遮罩（不露出正在加载的网页），只在退出时渐隐
+            alpha = 1f
+        }
+        buildCoverContent(cover)
+        // 插到频道面板之下：加载期间面板仍可呼出操作，网页画面被黑幕挡住
+        val root = findViewById<FrameLayout>(R.id.root)
+        root.addView(cover, root.indexOfChild(panelRoot),
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        transitionCover = cover
+        return cover
+    }
+
+    /**
+     * 黑幕正中的内容：台名 → 「正在连接…」。
+     * 只留字，不加进度条/横线：动静只给省略号，切台那几秒看着安静一些。
+     */
+    private fun buildCoverContent(cover: FrameLayout) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.CENTER }
+        }
+        val name = TextView(this).apply {
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 26f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+        }
+        val hint = TextView(this).apply {
+            setTextColor(0xFF8E8E93.toInt())
+            textSize = 15f
+            gravity = Gravity.CENTER
+        }
+        box.addView(name, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        box.addView(hint, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(12) })
+        cover.addView(box)
+        coverBox = box
+        coverName = name
+        coverHint = hint
+    }
+
+    /**
+     * 面板开着的时候把黑幕上的字收起来：黑幕在面板下层，面板又是半透明的，
+     * 字透上来会糊在频道列表上。字是给“只有一片黑”准备的，面板一收自然会露出来。
+     */
+    private fun syncCoverText() {
+        coverBox?.visibility = if (panelOpen) View.GONE else View.VISIBLE
+    }
+
+    /** 「正在连接」后面那几个点：不写死成动画字库，按帧加一个，回到原点再走一遍 */
+    private val coverDots = object : Runnable {
+        override fun run() {
+            val hint = coverHint ?: return
+            coverDotFrame = (coverDotFrame + 1) % 4
+            hint.text = "正在连接" + ".".repeat(coverDotFrame)
+            hint.postDelayed(this, 450)
+        }
+    }
+
     /** 开始/重开铺满轮询：先清掉可能在队列里的同一轮，避免叠成多份 */
     private fun restartVideoWatch() {
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
+        webView.removeCallbacks(soundWatch)
         webView.postDelayed(videoWatch, 400)
+    }
+
+    /**
+     * 开关页面里的声音闸门（页面那边只看 window.__tvSoundOn）。
+     * 关着的时候页面上任何 video 都被按成静音，所以起播/切台过渡期间不会有声音；
+     * 开的时候会把当前那个全屏 video 的静音属性拿掉、音量压到 50%。
+     */
+    private fun setSoundOn(on: Boolean) {
+        soundOn = on
+        if (!::webView.isInitialized) return
+        TvLog.d(TAG, if (on) "sound on" else "sound muted")
+        webView.evaluateJavascript(
+            "window.__tvSound&&window.__tvSound(" + (if (on) "1" else "0") + ")", null
+        )
+    }
+
+    // 没有黑幕可等的静默重铺（站内跳转 / 返回）：靠这里等目标源真的出画面再开声。
+    // 配了脚本的页面还要等脚本跑过一轮，否则开声的可能是脚本正要切掉的那个台。
+    private val soundWatch: Runnable = object : Runnable {
+        override fun run() {
+            if (!webOpen || soundOn) return
+            if (scriptHoldCover || scriptBusy()) {
+                webView.postDelayed(this, 200)
+                return
+            }
+            val gen = webGen
+            webView.evaluateJavascript(FRAME_READY_JS) { result ->
+                if (gen != webGen || soundOn) return@evaluateJavascript
+                if (result?.trim()?.trim('"') == "1") setSoundOn(true)
+                else webView.postDelayed(this, 200)
+            }
+        }
+    }
+
+    // ---------- 站点脚本 ----------
+
+    /**
+     * 页面里 TV.* 的出口。这个方法跑在页面的 JS 线程上，界面动作一律回主线程；
+     * 当前页面没匹配到脚本时直接丢弃，别的站拿不到任何能力。
+     */
+    private inner class TvBridge {
+        @JavascriptInterface
+        fun send(json: String) {
+            webView.post { onScriptMessage(json) }
+        }
+    }
+
+    private fun onScriptMessage(json: String) {
+        if (scriptCode == null || !webOpen) return
+        val obj = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
+        when (obj.optString("t")) {
+            "log" -> TvLog.d(TAG, "[tvscript] " + obj.optString("m"))
+            "toast" -> toast(obj.optString("m"))
+            "repeat" -> armScriptRepeat(obj.optInt("ms", 0))
+            "holdCover" -> holdCoverForScript()
+            // 脚本说自己这轮干完了：开闸门，这之后才轮到接管画面
+            "afterSwitch", "done" -> openScriptGate("脚本报完成")
+        }
+    }
+
+    /**
+     * 注入：先铺 TV 这层接口，再跑脚本正文。
+     * 脚本异常一律吞掉只记日志 —— 用户写的代码挂了不能影响播放。
+     */
+    private fun injectSiteScript() {
+        val code = scriptCode ?: return
+        if (!webOpen) return
+        scriptRanAt = SystemClock.uptimeMillis()
+        scriptRepeatAsked = false
+        webView.evaluateJavascript(
+            TV_BOOT_JS + "\n(function(){try{\n" + code +
+                "\n}catch(e){window.TV.log('脚本异常: ' + (e && e.stack ? e.stack : e));}})();",
+            null
+        )
+        // 跑完若是没要求重复、也没要压黑幕，就当它这轮已经交差（不再白等到超时）
+        webView.removeCallbacks(scriptSettleTick)
+        webView.postDelayed(scriptSettleTick, SCRIPT_GRACE_MS)
+    }
+
+    /**
+     * 脚本要求按自己的节奏重复注入（SPA 换路由、播放器异步渲染）。
+     * ms <= 0 就是「不用再跑了」，等同于报完成：开闸门交给播放流程。
+     */
+    private fun armScriptRepeat(ms: Int) {
+        webView.removeCallbacks(scriptTick)
+        // 闸门已经开了（脚本报过完成 / 超时放行）：再要求重复也不理，
+        // 否则「说干完了」之后还能一轮轮接着跑，闸门就形同虚设
+        if (scriptGateOpen) return
+        scriptRepeatMs = if (ms in 200..60_000) ms else 0
+        if (scriptRepeatMs == 0) {
+            openScriptGate("脚本收工")
+            return
+        }
+        scriptRepeatAsked = true
+        if (scriptRepeatStartedAt == 0L) scriptRepeatStartedAt = SystemClock.uptimeMillis()
+        // 重复也得有个头：没等到目标元素的脚本不能永远往下跑
+        val tooMany =
+            SystemClock.uptimeMillis() - scriptRepeatStartedAt > SCRIPT_REPEAT_MAX_MS ||
+                scriptRepeatRounds >= SCRIPT_REPEAT_MAX_ROUNDS
+        if (tooMany) {
+            TvLog.d(TAG, "[tvscript] 重复注入到上限（$scriptRepeatRounds 轮），停")
+            openScriptGate("重复注入到上限")
+            return
+        }
+        webView.postDelayed(scriptTick, scriptRepeatMs.toLong())
+    }
+
+    private val scriptTick = object : Runnable {
+        override fun run() {
+            if (scriptCode == null || scriptRepeatMs <= 0 || scriptGateOpen) return
+            scriptRepeatRounds++
+            injectSiteScript()
+            if (scriptRepeatMs > 0) webView.postDelayed(this, scriptRepeatMs.toLong())
+        }
+    }
+
+    // ---------- 脚本闸门 ----------
+
+    /** 闸门合着：这一页配了脚本，而且脚本还没说它干完 */
+    private fun scriptBusy(): Boolean = scriptCode != null && !scriptGateOpen
+
+    /** 页面（或 SPA 新路由）开始：重新合上闸门、重置重试计数 */
+    private fun resetScriptGate() {
+        scriptGateOpen = false
+        scriptGateArmedAt = SystemClock.uptimeMillis()
+        scriptRepeatStartedAt = 0L
+        scriptRepeatRounds = 0
+        webView.removeCallbacks(scriptTick)
+        webView.removeCallbacks(scriptSettleTick)
+        webView.removeCallbacks(scriptGateTick)
+        TvLog.d(TAG, "[tvscript] 闸门重置 script=${scriptCode != null}")
+        if (scriptCode != null) webView.postDelayed(scriptGateTick, 500)
+    }
+
+    /**
+     * 开闸门：脚本这轮结束了（完成、还是放弃都算）。
+     * 到这里才真正接管画面：先放开脚本压的黑幕，再重新起一轮全屏/首帧/开声轮询。
+     */
+    private fun openScriptGate(reason: String) {
+        if (scriptGateOpen) return
+        scriptGateOpen = true
+        scriptRepeatMs = 0
+        webView.removeCallbacks(scriptTick)
+        webView.removeCallbacks(scriptSettleTick)
+        webView.removeCallbacks(scriptGateTick)
+        TvLog.d(TAG, "[tvscript] 开闸：$reason")
+        if (!webOpen) return
+        if (scriptHoldCover) {
+            scriptHoldCover = false
+            reassertFullscreen()
+        }
+        restartVideoWatch()
+    }
+
+    /**
+     * 注入后的一小段观察：这一轮没要「过会儿再跑」、也没压黑幕，就是脚本干完了。
+     * 看的是本轮有没有重新要重试，而不是定时器是不是还在（余留的下一拍不算数）。
+     */
+    private val scriptSettleTick = Runnable {
+        if (scriptGateOpen || scriptCode == null || !webOpen) return@Runnable
+        if (scriptHoldCover || scriptRepeatAsked) return@Runnable
+        openScriptGate("脚本这一轮没事了")
+    }
+
+    /** 闸门兜底：脚本一直不说完成（写挂了 / 选择器不对），到点放行 */
+    private val scriptGateTick = object : Runnable {
+        override fun run() {
+            if (scriptGateOpen || scriptCode == null || !webOpen) return
+            if (SystemClock.uptimeMillis() - scriptGateArmedAt < SCRIPT_GATE_MAX_MS) {
+                webView.postDelayed(this, 500)
+                return
+            }
+            TvLog.d(TAG, "[tvscript] 脚本超时未完成，放行")
+            openScriptGate("等脚本超时")
+        }
+    }
+
+    /**
+     * 脚本换完流后重新接管：清掉旧轮询重开一轮，新播放器/新 video 会在这轮里被重新铺满，
+     * 尺寸也重给一次 —— 有的站换台后页面缩放变了。
+     */
+    private fun reassertFullscreen() {
+        if (!webOpen || customView != null) return
+        injectViewportSize()
+        webView.removeCallbacks(fsWatch)
+        restartVideoWatch()
+    }
+
+    /**
+     * 脚本要开始页内切台：把黑幕重新盖上并压住，直到 TV.afterSwitch。
+     * 已经露着画面的情况也要盖（切台中间新旧画面交替很难看），所以这里会
+     * 把 liveEntered 复位一次，让后面的揭示流程重新走一遍。
+     */
+    private fun holdCoverForScript() {
+        if (!webOpen) return
+        scriptHoldCover = true
+        if (transitionCover == null) {
+            liveEntered = false
+            playTimeoutArmed = false
+            showTransitionCover()
+        }
+        TvLog.d(TAG, "[tvscript] hold cover")
     }
 
     /** 退出 CSS 全屏（把视频放回页面原位置） */
@@ -1478,7 +2103,13 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private fun hideTransitionCover() {
         val cover = transitionCover ?: return
         transitionCover = null
-        Log.d(TAG, "cover fade out")
+        // 黑幕要走了：省略号也停，别在后台空转
+        coverHint?.removeCallbacks(coverDots)
+        coverBox = null
+        coverName = null
+        coverHint = null
+        coverFailed = false
+        TvLog.d(TAG, "cover fade out")
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
         disarmPlayTimeout()
@@ -1516,7 +2147,6 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private fun kindByExtension(path: String?): String? {
         if (path == null) return null
         return when {
-            path.endsWith(".css") -> "style"
             path.endsWith(".map") -> "map"
             path.endsWith(".webmanifest") || path.endsWith(".manifest") -> "manifest"
             FONT_EXTS.any { path.endsWith(it) } -> "font"
@@ -1527,15 +2157,69 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     // ---------- 静态脚本磁盘缓存（同站多频道复用，二次进台免下载 JS） ----------
 
-    private fun cacheRoot(): File = File(cacheDir, "webstatic").apply { mkdirs() }
+    // 目录名带版本：v1 只存过没解压的原始字节（见 plainBody），v2 按脚本自己的域名分组，
+        // v3 遇到 docUrl 还没就绪的早期请求会退回按 CDN 域名建组；这些条目一律作废
+        // （还能被当成有效缓存回给内核），整目录删掉
+    private fun cacheRoot(): File = File(cacheDir, CACHE_DIR).apply {
+        mkdirs()
+        synchronized(legacyCacheLock) {
+            if (!legacyCacheCleared) {
+                legacyCacheCleared = true
+                for (old in LEGACY_CACHE_DIRS) {
+                    File(cacheDir, old).takeIf { it.isDirectory }?.deleteRecursively()
+                }
+            }
+        }
+    }
 
-    /** 域名分组目录：cache/webstatic/<host>/<路径哈希>.js|.meta */
+    private val legacyCacheLock = Any()
+
+    @Volatile
+    private var legacyCacheCleared = false
+
+    /**
+     * 把响应体还原成明文。有些 CDN 无视 Accept-Encoding: identity
+     * 照样回 gzip：把压缩字节当 JS 交给内核，内核按文本解析二进制，直接
+     * Uncaught SyntaxError: Invalid or unexpected token，整段脚本作废（取流函数就这么丢的）。
+     * 返回 null 表示这个编码解不了，交回内核自己走网络。
+     */
+    private fun plainBody(bytes: ByteArray, encoding: String): ByteArray? {
+        val enc = encoding.trim().lowercase()
+        // 头里没写但确实是 gzip 的，按魔数认
+        val gzip = enc.contains("gzip") ||
+            (bytes.size > 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte())
+        return when {
+            gzip -> runCatching {
+                GZIPInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }
+            }.getOrNull()
+            enc.isEmpty() || enc == "identity" -> bytes
+            enc.contains("deflate") -> runCatching {
+                InflaterInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }
+            }.getOrNull()
+            else -> null
+        }
+    }
+
+    /**
+     * 分组目录：cache/<CACHE_DIR>/<频道域名>/<整条 URL 哈希>.js|.meta
+     *
+     * 目录名按「频道自己的域名」算，不按脚本所在域名：一个台往往从好几个 CDN 拉 JS
+     * （页面是 www.xxx.cn，脚本却在 ydh5./s./cdn… 上），按资源域名分组会散成一堆，
+     * 清缓存时就没法把这个台的缓存一把清掉。
+     * 条目键仍是整条 URL 的哈希，同名文件不会互相覆盖。
+     */
     private fun cacheEntry(urlStr: String): Pair<File, String>? {
-        val host = URL(urlStr).host?.lowercase() ?: return null
         val key = MessageDigest.getInstance("MD5")
             .digest(urlStr.toByteArray()).joinToString("") { "%02x".format(it) }
+        val host = pageHost() ?: livePageHost ?: hostOf(urlStr) ?: return null
         return Pair(File(cacheRoot(), host), key)
     }
+
+    /** 当前播放页（就是当前频道）的域名；不在播放页时为 null */
+    private fun pageHost(): String? = hostOf(docUrl)
+
+    private fun hostOf(u: String?): String? =
+        u?.let { runCatching { URL(it).host?.lowercase() }.getOrNull() }?.takeIf { it.isNotBlank() }
 
     /** 命中直接返回；未命中当场下载（就是页面本该收到的那份）并落盘 */
     private fun cacheLookupOrFetch(urlStr: String, origin: String?): WebResourceResponse? {
@@ -1563,6 +2247,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     headers["Access-Control-Allow-Origin"] = origin
                 resp.setResponseHeaders(headers)
                 touchAccess(meta)
+                // 每次页面加载都有几百条，只进 logcat，不占配置页的日志区
                 Log.d(TAG, "cache hit: $urlStr")
                 return resp
             }
@@ -1599,7 +2284,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             }
             // no-store/private：不存也不代答，交回内核自己走网络
             if (ttl <= 0L) return null
-            val bytes = conn.inputStream.use { it.readBytes() }
+            val raw = conn.inputStream.use { it.readBytes() }
+            if (raw.isEmpty() || raw.size > CACHE_MAX_OBJECT) return null
+            val enc = conn.getHeaderField("Content-Encoding").orEmpty()
+            val bytes = plainBody(raw, enc) ?: return null
             if (bytes.isEmpty() || bytes.size > CACHE_MAX_OBJECT) return null
             // 原样收下服务端的关键响应头：跨域脚本缺 CORS 头会被内核判成加载失败
             val headers = LinkedHashMap<String, String>()
@@ -1619,7 +2307,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 }
             )
             cacheTrim()
-            Log.d(TAG, "cache store: $urlStr ttl=$ttl size=${bytes.size}")
+            Log.d(TAG, "cache store: $urlStr ttl=$ttl size=${bytes.size}" +
+                if (enc.isNotEmpty() && !enc.equals("identity", true)) " enc=$enc" else "")
             val out = LinkedHashMap(headers)
             if (origin != null && out.keys.none { it.equals("Access-Control-Allow-Origin", true) })
                 out["Access-Control-Allow-Origin"] = origin
@@ -1683,9 +2372,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     companion object {
         const val TAG = "TvWeb"
-        const val ERROR_URL = "file:///android_asset/error.html"
 
-        // 起播超时：点台后这么久还没等到视频首帧，就关掉网页显示错误页
+        // 起播超时：点台后这么久还没等到视频首帧，就把黑幕改成错误屏
         const val PLAY_TIMEOUT_MS = 15_000L
         // 首帧到位后黑幕最多再压这么久等容器停稳：页面缩放一般一两拍内就收敛了
         const val FRAME_SETTLE_MS = 1_200L
@@ -1699,8 +2387,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
 
-        // 总开关：是否拦截网页的 CSS / 图片 / 字体资源
-        const val BLOCK_STYLE_RESOURCES = true
+        // 拦截样式资源 / 脚本缓存的开关在配置页「开发者调试」里（ChannelStore 存，
+        // 默认值那两个开关都是开的），不在代码里写死
 
         // 统计/广告/埋点域名黑名单：整域（含子域）返回空响应，播放器不感知
         val TRACKING_HOSTS = arrayOf(
@@ -1711,11 +2399,12 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             "talkingdata.com", "bugly.qq.com"
         )
 
-        // 静态脚本磁盘缓存（按域名分组）：单文件上限 6MB、总预算 80MB
+        // 静态脚本磁盘缓存（按频道域名分组）：单文件上限 6MB、总预算 80MB
+        // 目录名带版本：换分组方式就换版本名，旧目录顺带删掉（见 LEGACY_CACHE_DIRS）
+        const val CACHE_DIR = "webstatic_v4"
+        val LEGACY_CACHE_DIRS = arrayOf("webstatic", "webstatic_v2", "webstatic_v3")
         const val CACHE_MAX_OBJECT = 6L * 1024 * 1024
         const val CACHE_BUDGET = 80L * 1024 * 1024
-        // 总开关：脚本请求走本地缓存（未命中当场下载并留存，下次直接秒回）
-        const val SERVE_FROM_SCRIPT_CACHE = true
         // 无 Cache-Control 但文件名带内容哈希/版本号的 JS：按不可变资源缓存 7 天
         const val CACHE_DEFAULT_TTL = 7 * 24 * 3600L
         val VERSIONED_URL = Regex("\\.[0-9a-f]{8,}\\.js|ver=[0-9a-z]+")
@@ -1727,29 +2416,30 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             "Cache-Control", "ETag", "Last-Modified", "Vary"
         )
 
-        // 调试浮层开关：显示页面里每个 video 的 src（排查广告 video 用），需要时再打开
-        const val DEBUG_SHOW_VIDEO_INFO = false
-
-        // 调试边界标记：全屏容器画青色边框、video 画粉色内描边，用来分辨“容器偏了”
-        // 还是“video 偏了”，同时打开每 2 秒一条的 [tvgeom] 几何日志。
-        // 默认关闭（正式包画面干净）；排查布局问题时改成 true 重新打包即可。
-        const val DEBUG_FRAME_MARKERS = false
+        // 几何调试（全屏容器画青色边框、video 画粉色内描边 + 每秒一行 [tvgeom] 日志）：
+        // 开关在配置页「开发者调试」里，默认关（正式包画面干净）。
+        // 标记由 applyFsJs() 下发到页面的 window.__tvDbgFrame，所以切台后生效。
 
         // 列出页面所有 video 的 src 与状态
-        val DEBUG_INFO_JS = """
+        // maxCols 由 overlayCols() 现算传入（见上），不在这里写死
+        private fun debugInfoJs(maxCols: Int): String = """
             (function () {
               var out = [];
-              var bt = (document.body ? (document.body.innerText || '') : '').replace(/\s+/g, ' ');
-              out.push('url=' + location.href.slice(0, 60));
-              out.push('title=' + (document.title || '-').slice(0, 30) + ' txt=' + bt.slice(0, 70));
+              // 地址给完整的：截断了就分不清是取流失败还是浮层没显全
+              out.push('url=' + location.href);
+              // 标题和正文不打了：只用来认页面，占地方；body.innerText 还会每轮
+              // 强制一次布局（700ms 一次），去掉也省事
               // shadow 里的 video 也算进来（开放影子才行）：每个 host 的影子树里再搜一次 video
-              var vShadow = [];
-              tryShadowVideoCollection(document, vShadow);
-              tryShadowVideoCollection(document.documentElement, vShadow);
-              tryShadowVideoCollection(document.body, vShadow);
+              // 影子根里的 video：由 attachShadow 拦截 + MutationObserver 收集在
+              // window.__tvShadowVids 里，这里直接读，不再钻树
+              var vShadow = window.__tvShadowVids || [];
               var vs = document.querySelectorAll('video');
               var vIdx = 0;
-              for (var i = 0; i < vs.length; i++) out.push(videoEntry(vs[i], vIdx++));
+              // 只列会被选片逻辑考虑的那些：mp4 广告、以及还没拿到流也没出画面的占位元素，
+              // 一律不列。列出来只会让人以为它被选中了
+              for (var i = 0; i < vs.length; i++) {
+                if (eligible(vs[i])) out.push(videoEntry(vs[i], vIdx++));
+              }
               for (var i2 = 0; i2 < vShadow.length; i2++) {
                 var sv = vShadow[i2];
                 if (!sv) continue;
@@ -1757,7 +2447,34 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 var dup = false;
                 for (var j = 0; j < vs.length; j++) { if (vs[j] === sv) { dup = true; break; } }
                 if (dup) continue;
-                out.push(videoEntry(sv, vIdx++));
+                if (eligible(sv)) out.push(videoEntry(sv, vIdx++));
+              }
+              // 和选片（APPLY_FS_JS 里的 playableSrc + mp4 过滤）同一套门槛：
+              // 地址是 mp4 直链 = 广告，不算；没地址也没出帧 = 还没就绪，也不算
+              function eligible(v) {
+                if (!v) return false;
+                var a = v.getAttribute('src') || '';
+                var c = v.currentSrc || '';
+                var p = v.src || '';
+                var mp4 = /\.mp4(\?|#|&|$)/i;
+                if (mp4.test(a) || mp4.test(c) || mp4.test(p)) return false;
+                var s = a || c || p;
+                if (s.indexOf('blob:') === 0) return true;
+                if (/\.(m3u8|mpd|flv|webm|ogg|ogv|ts|mp3|m4a|aac|wav)(\?|#|&|$)/i.test(s)) return true;
+                // 和 playableSrc 一模一样的最后一道：出过帧才算。
+                // 只看 srcObject 会把“接上了流但一帧没出”的空壳也列进来，
+                // 而选片那边根本不会选它 —— 列出来只会让人以为它参与了竞争
+                return v.videoWidth > 0;
+              }
+              // duration 只写成一个短标签：直播是 inf / -（NaN 或还没加载），
+              // 贴片广告和点播是有限的秒数，对应选片里的 finiteDur() 判据
+              function durText(v) {
+                try {
+                  var d = v.duration;
+                  if (typeof d !== 'number' || isNaN(d)) return '-';
+                  if (!isFinite(d)) return 'inf';
+                  return d.toFixed(1);
+                } catch (e) { return '-'; }
               }
               function videoEntry(v, idx) {
                 if (!v) return 'v? src=- paused=- size=0x0 t=0.0 rs=- tracks=-';
@@ -1766,38 +2483,31 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 var prop = v.src || '-';
                 var cur = v.currentSrc || '-';
                 var obj = v.srcObject ? String(v.srcObject) : '-';
-                return 'v' + idx + ' attr=' + attr.slice(0, 40) +
-                  ' src=' + prop.slice(0, 40) +
-                  ' cur=' + cur.slice(0, 40) +
-                  ' obj=' + obj.slice(0, 40) +
-                  ' paused=' + v.paused + ' size=' +
-                  Math.round(r.width) + 'x' + Math.round(r.height) +
-                  ' t=' + v.currentTime.toFixed(1) + (v.muted ? ' muted' : '') +
+                // 标题标出“这个就是被铺满的那个”，否则列一堆分不清哪个在播
+                var fs = window.__tvFs;
+                var tag = (fs && fs.el === v) ? '  ←全屏中' : '';
+                // 被铺满那个的 size 是“我们铺完之后”的尺寸（wrap 的 100%x100%），
+                // 不是它原本在页面里的大小；选片时拿来比较的是进 wrap 之前那个（preWrap）
+                var pre = (fs && fs.el === v && fs.origW)
+                  ? ' preWrap=' + Math.round(fs.origW) + 'x' + Math.round(fs.origH)
+                  : '';
+                var sizeLine = ' size=' + Math.round(r.width) + 'x' + Math.round(r.height) + pre;
+                // 地址全给：鉴权参数往往在地址尾部，截了就看不出是哪个源
+                return 'v' + idx + tag +
+                  '\n  attr=' + attr +
+                  '\n  src=' + prop +
+                  '\n  cur=' + cur +
+                  '\n  obj=' + obj +
+                  '\n  paused=' + v.paused + sizeLine +
+                  ' t=' + v.currentTime.toFixed(1) +
+                  ' dur=' + durText(v) + (v.muted ? ' muted' : '') +
                   ' vol=' + v.volume.toFixed(2) +
                   ' vw=' + v.videoWidth + 'x' + v.videoHeight + ' rs=' + v.readyState +
                   ' tracks=' + (v.srcObject && v.srcObject.getTracks
                     ? v.srcObject.getTracks().map(function (t) { return t.kind; }).join(',')
                     : '-');
               }
-              function tryShadowVideoCollection(host, out) {
-                if (!host) return;
-                try {
-                  var kids = host.children;
-                  for (var i = 0; i < kids.length; i++) {
-                    var k = kids[i];
-                    if (k.tagName === 'VIDEO') out.push(k);
-                    if (k.shadowRoot) {
-                      try {
-                        var vs2 = k.shadowRoot.querySelectorAll('video');
-                        for (var j = 0; j < vs2.length; j++) out.push(vs2[j]);
-                      } catch (e) {}
-                      tryShadowVideoCollection(k.shadowRoot, out);
-                    }
-                    tryShadowVideoCollection(k, out);
-                  }
-                } catch (e) {}
-              }
-              // 诊断用：视口尺寸 / iframe / 全屏容器实际覆盖范围
+              // 诊断用：视口尺寸 / 全屏容器实际覆盖范围
               out.push('vw=' + window.innerWidth + 'x' + window.innerHeight +
                 ' doc=' + document.documentElement.clientWidth + 'x' +
                 document.documentElement.clientHeight +
@@ -1817,27 +2527,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 ' body=' + (document.body ? getComputedStyle(document.body).zoom : '-') +
                 ' bodyRect=' + (bb ? Math.round(bb.width) + 'x' + Math.round(bb.height) +
                   ' @' + Math.round(bb.left) + ',' + Math.round(bb.top) : '-'));
-              var ifs = document.querySelectorAll('iframe');
-              for (var k = 0; k < ifs.length; k++) {
-                var ri = ifs[k].getBoundingClientRect();
-                var sameOrigin = false;
-                try { sameOrigin = !!ifs[k].contentDocument; } catch (e) {}
-                out.push(iframeEntry(k, ifs[k], ri, sameOrigin));
-              }
-              function iframeEntry(idx, f, ri, sameOrigin) {
-                return 'iframe' + idx + ' ' + Math.round(ri.width) + 'x' + Math.round(ri.height) +
-                  ' @' + Math.round(ri.left) + ',' + Math.round(ri.top) +
-                  ' same=' + sameOrigin + ' v=' + (sameOrigin ?
-                    (function () {
-                      var d = f.contentDocument;
-                      var n = d.querySelectorAll('video').length;
-                      // 同源 iframe 里也有可能有影子里边，顺便再数一遍
-                      var extra = [];
-                      tryShadowVideoCollection(d, extra);
-                      return n + (extra.length ? '+' + extra.length : '');
-                    })() : -1) +
-                  ' src=' + (f.getAttribute('src') || '-').slice(0, 30);
-              }
+              // iframe 不单独列：选片只看主文档，iframe 里的 video 不参与比较，
+              // 而 iframe 条目多、src 又长，列出来只会把浮层刷满
               var s = window.__tvFs;
               if (s && s.wrap) {
                 var rw = s.wrap.getBoundingClientRect();
@@ -1848,20 +2539,68 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               } else {
                 out.push('wrap none');
               }
-              return out.length ? out.join('\n') : '(no video)';
+              // 内核不会给没有空格的长串（URL）折行，插零宽空格也不断，超出一行就直接裁掉。
+              // 所以自己按列数断行；列数由原生按浮层字体度量现算（overlayCols），
+              // 宽度够就不用折，只有真放不下才断。
+              var MAX_COLS = $maxCols;
+              var raw = out.length ? out.join('\n').split('\n') : ['(no video)'];
+              var lines = [];
+              for (var li = 0; li < raw.length; li++) {
+                var ln = raw[li];
+                while (ln.length > MAX_COLS) {
+                  var at = MAX_COLS;
+                  // 别把代理对（emoji 之类）从中间切开
+                  var code = ln.charCodeAt(at - 1);
+                  if (code >= 0xD800 && code <= 0xDBFF) at--;
+                  lines.push(ln.slice(0, at));
+                  ln = '  ' + ln.slice(at);
+                }
+                lines.push(ln);
+              }
+              // 浮层高度有限（一屏也就 30 行）：超了就截住并写明，别让人以为是全量
+              var MAX_LINES = 30;
+              if (lines.length > MAX_LINES) {
+                return lines.slice(0, MAX_LINES).join('\n') +
+                  '\n…（还有 ' + (lines.length - MAX_LINES) + ' 行未显示）';
+              }
+              return lines.join('\n');
             })();
         """
 
-        // 页面一启动就监听 DOM：新出现的 video[src^="blob:"] 立刻全屏（包括同源 iframe 里）。
+        // 页面一启动就监听 DOM：新出现的 video[src^="blob:"] 立刻全屏（只看主文档，不进 iframe）。
         // keydown/click 处理器里调用才带“用户手势”，部分 WebView 全屏必须要有手势。
         // 把 blob 视频铺满视口（CSS 全屏，不依赖全屏 API / 用户手势）。
         // 页面上可能有多个 video（广告/正片）：选面积最大且带可播放 src 的那个
         // （blob: 或 m3u8/flv/mp4 等地址），覆盖样式铺满 100% 后全屏；每轮复选并尝试 play()。
-        val APPLY_FS_JS =
-            "window.__tvDbgFrame=" + (if (DEBUG_FRAME_MARKERS) "1" else "0") + ";" + """
+        fun applyFsJs(): String =
+            "window.__tvDbgFrame=" +
+                (if (ChannelStore.devFlag("frameMarkers")) "1" else "0") + ";" + """
             (function () {
               // 调试边界标记开关（由原生每次注入时下发，页面重新加载也会重给一遍）
               var DBG = window.__tvDbgFrame === 1;
+              // 页面自己的 View Transition：切换时会把整页快照画进 top layer 演一遍，
+              // 那一层连 popover 都盖得住 —— 表现就是铺满之后被页面/播放器外框闪一下。
+              // 换成直接执行回调的版本：页面走的还是同一套 DOM 更新，只是不再生成快照。
+              (function () {
+                try {
+                  if (window.__tvNoVT) return;
+                  window.__tvNoVT = 1;
+                  if (typeof document.startViewTransition !== 'function') return;
+                  var shim = function (cb) {
+                    var p = Promise.resolve().then(function () {
+                      if (typeof cb === 'function') return cb();
+                    });
+                    return {
+                      ready: p, finished: p, updateCallbackDone: p,
+                      skipTransition: function () {},
+                      types: { add: function () {}, has: function () { return false; },
+                        forEach: function () {} }
+                    };
+                  };
+                  try { Object.defineProperty(shim, 'name', { value: 'startViewTransition' }); } catch (e) {}
+                  document.startViewTransition = shim;
+                } catch (e) {}
+              })();
               // 这个 video 是不是真的在放画面：
               // 1) src 是 blob: 或媒体后缀（MSE / 直连流）
               // 2) 或者元素已经解出帧（videoWidth>0）——播放器把 MediaStream 挂到
@@ -1873,23 +2612,60 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 if (v.videoWidth > 0) return 'frame';
                 return null;
               }
-              // 声音：有些播放器默认静音起播（autoplay 策略 / 自己的默认值），画面有了却没声。
-              // 通用处理：把声音打开并压到 50%。
-              // 要尽早生效——不能等轮询（最长 1 秒一轮）或等容器建好，否则就是“画面出来了
-              // 才出声”。所以这里两个入口都用：
-              //   1) 拿到 video 的那一瞬（pickVideo 之后）立刻设一次；
-              //   2) 挂上事件，播放器自己再改回去（play/playing/切源）时当场纠正。
-              // 每轮轮询的 applyStyles 里还会再设一次兜底。
+              // 广告基本都是 mp4 直链（直播正片通常是 MSE 或 m3u8/flv，不走 mp4 文件）。
+              // 所以地址里带 .mp4 的一律不选，避免把广告铺满全屏。
+              function isMp4Url(s) {
+                return /\.mp4(\?|#|&|$)/i.test(s || '');
+              }
+              // 贴片广告是固定时长的一段媒体（15s/30s 那种），duration 一加载就是有限值；
+              // 直播是持续推流，duration 要么 Infinity，要么刚加载时 NaN / 0。
+              // 所以「有限且 > 0」只可能是点播式媒体，不是直播。
+              // 返回 false 一律表示「不像广告」（无限/未知也算）：flv、自研播放器报 NaN 很常见，
+              // 把不确定的当成广告会把正常直播排除掉，宁可不动它。
+              function finiteDur(v) {
+                try {
+                  var d = v.duration;
+                  return typeof d === 'number' && isFinite(d) && d > 0;
+                } catch (e) { return false; }
+              }
+              // 声音分两段：
+              //   起播阶段一律静音（声音闸门关着）—— 一个页面上有多个频道时，页面自己
+              //     先播的那个台、和脚本切过去的目标台之间有一段过渡，不静音就会先听到
+              //     第一个台的声音再一跳；而且静音起播也不会被自动播放策略拦下。
+              //   原生在画面真正落定、黑幕要揭开时调 window.__tvSound(1) 开声。
+              // 开声之后：有些播放器默认静音起播（autoplay 策略 / 自己的默认值），
+              // 画面有了却没声，这里把声音压到 50% 并持续纠正。
               var TV_VOLUME = 0.5;
               function applyVolume(el) {
                 if (!el) return;
                 try {
+                  // 规则只有一条：铺满的那一路要有声、音量 50%；其它一律静音。
+                  // 不再看「声音闸门」——那个门只在还没选片时用来压住页面先起播的东西，
+                  // 一旦已经选定这一路，它就是用户要听的东西，闸门开没开都不应该把它静音
+                  // （早先按闸门判断，闸门没来得及打开时全屏画面就一直静音、音量也没改）。
+                  var cur = window.__tvFs && window.__tvFs.el;
+                  if (!cur) {
+                    if (window.__tvSoundOn !== 1) {
+                      if (!el.muted) el.muted = true;
+                      if (el.hasAttribute && !el.hasAttribute('muted')) el.setAttribute('muted', '');
+                      return;
+                    }
+                  } else if (el !== cur) {
+                    if (!el.muted) el.muted = true;
+                    return;
+                  }
                   if (el.muted) el.muted = false;
                   if (el.defaultMuted) el.defaultMuted = false;
                   if (el.hasAttribute && el.hasAttribute('muted')) el.removeAttribute('muted');
                   if (Math.abs(el.volume - TV_VOLUME) > 0.001) el.volume = TV_VOLUME;
                 } catch (e) {}
               }
+              // 原生开/关声音闸门的唯一入口
+              window.__tvSound = function (on) {
+                window.__tvSoundOn = on ? 1 : 0;
+                var s = window.__tvFs;
+                applyVolume(s && s.el);
+              };
               // 同一元素只挂一次；设完值不会再触发额外的写入（值已正确就是空转）
               function bindVolume(el) {
                 if (!el || el.__tvVolBound) return;
@@ -1903,79 +2679,127 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   el.addEventListener('canplay', fix);
                 } catch (e) {}
               }
-              // 在页面（含同源 iframe、含 open shadowRoot）里选面积最大的可播放 video
-              // shadow DOM 里的 video 不是 document.querySelectorAll('video') 能到的，
-              // 所以把文档/根里所有 video 以及 open shadow 树里的 video 都收集起来再比面积。
-              // 用递归拍平，不锁定任何网站的标签/类名/加载方式（shadow 只可能是 open 的才统计）。
-              function pickVideo() {
-                var docs = [document], allV = [], best = null, bestArea = -1;
-                for (var i = 0; i < docs.length; i++) {
-                  var d = docs[i];
-                  addAllVideosFromDocOrRoot(d, allV);
-                  var fs = d.querySelectorAll('iframe');
-                  for (var k = 0; k < fs.length; k++) {
-                    try { if (fs[k].contentDocument) docs.push(fs[k].contentDocument); } catch (e) {}
+              // ---- 影子 DOM 里的 video：attachShadow 拦截 + MutationObserver 收集 ----
+              // shadowRoot 里的 video 用 document.querySelectorAll('video') 拿不到。以前是每次选片
+              // 递归钻树；改成拦一次 attachShadow：谁建了影子根就拿到它的引用、对根挂观察器，
+              // 看着它内部插进来的 video 登记到清单里，选片时直接读清单。
+              // 好处是不猜标签/类名，closed 的影子根也收得到（根本身在我们手里）。
+              var SHADOW_VIDS = window.__tvShadowVids || (window.__tvShadowVids = []);
+              function shadowAdd(el) {
+                if (!el || el.tagName !== 'VIDEO') return;
+                if (SHADOW_VIDS.indexOf(el) >= 0) return;
+                SHADOW_VIDS.push(el);
+              }
+              function shadowAddTree(root) {
+                if (!root || !root.querySelectorAll) return;
+                try {
+                  var vs = root.querySelectorAll('video');
+                  for (var i = 0; i < vs.length; i++) shadowAdd(vs[i]);
+                } catch (e) {}
+              }
+              function shadowWatch(root) {
+                if (!root || root.__tvShadowWatched) return;
+                root.__tvShadowWatched = 1;
+                shadowAddTree(root);
+                try {
+                  new MutationObserver(function (ms) {
+                    for (var i = 0; i < ms.length; i++) {
+                      var added = ms[i].addedNodes;
+                      for (var j = 0; j < added.length; j++) {
+                        var n = added[j];
+                        if (!n || n.nodeType !== 1) continue;
+                        if (n.tagName === 'VIDEO') shadowAdd(n);
+                        else shadowAddTree(n);
+                      }
+                    }
+                  }).observe(root, { childList: true, subtree: true });
+                } catch (e) {}
+              }
+              // 组件的 shadowRoot 刚建出来时它自己还在构造中，同步插 DOM 很常见；
+              // 观察器推到本轮之后挂，不去打扰它的初始化
+              function shadowWatchLater(root) {
+                if (!root) return;
+                try {
+                  if (typeof Promise === 'function') {
+                    Promise.resolve().then(function () { try { shadowWatch(root); } catch (e) {} });
+                  } else {
+                    setTimeout(function () { try { shadowWatch(root); } catch (e) {} }, 0);
                   }
+                } catch (e) {}
+              }
+              if (!window.__tvShadowHook) {
+                window.__tvShadowHook = 1;
+                try {
+                  var rawAttach = Element.prototype.attachShadow;
+                  if (rawAttach && !rawAttach.__tvHooked) {
+                    var hookedAttach = function (opts) {
+                      var root = rawAttach.call(this, opts);
+                      try { shadowWatchLater(root); } catch (e) {}
+                      return root;
+                    };
+                    // 让钩子尽量像原生：名称、形参个数、toString 都对齐，
+                    // 页面里查「原型被改过没有」的逻辑看到的是 [native code]
+                    try { Object.defineProperty(hookedAttach, 'name', { value: 'attachShadow' }); } catch (e) {}
+                    try { Object.defineProperty(hookedAttach, 'length', { value: 1 }); } catch (e) {}
+                    try {
+                      hookedAttach.toString = function () {
+                        return 'function attachShadow() { [native code] }';
+                      };
+                    } catch (e) {}
+                    hookedAttach.__tvHooked = 1;
+                    Element.prototype.attachShadow = hookedAttach;
+                  }
+                } catch (e) {}
+              }
+              // 钩子装上之前页面已经建好的影子根：开页只补登记一次（能枚举到的 open 根）
+              if (!window.__tvShadowSeeded) {
+                window.__tvShadowSeeded = 1;
+                try {
+                  var hosts = document.querySelectorAll('*');
+                  for (var h = 0; h < hosts.length; h++) {
+                    if (hosts[h].shadowRoot) shadowWatch(hosts[h].shadowRoot);
+                  }
+                } catch (e) {}
+              }
+
+              // 在页面（含 shadowRoot）里选面积最大的可播放 video
+              // 影子根里的靠上面的钩子清单补进来；iframe 一律不管：那是另一个坐标系的文档。
+              function pickVideo(exclude) {
+                var allV = [], best = null, bestArea = -1;
+                try {
+                  var vs0 = document.querySelectorAll('video');
+                  for (var i0 = 0; i0 < vs0.length; i0++) allV.push(vs0[i0]);
+                } catch (e) {}
+                for (var s0 = 0; s0 < SHADOW_VIDS.length; s0++) {
+                  var sv0 = SHADOW_VIDS[s0];
+                  if (!sv0 || sv0.isConnected === false) continue;  // 已经不在文档里的丢掉
+                  if (allV.indexOf(sv0) >= 0) continue;
+                  allV.push(sv0);
                 }
                 // 先面积最大的可播放 video（视频真的出画面了再全屏，避免拿广告/占位 video）
+                // 分两档：duration 无限/未知的（直播）优先，有限时长的（贴片广告/点播）
+                // 只在没有直播可选时才用；两路同时存在时，广告再大也不跟直播抢。
+                var liveBest = null, liveArea = -1;
                 for (var j = 0; j < allV.length; j++) {
                   var v = allV[j];
-                  if (!playableSrc(v)) continue;
+                  if (v === exclude) continue;  // 已经铺满的那个不参与比较
+                  var ps = playableSrc(v);
+                  if (!ps) continue;
+                  if (isMp4Url(ps)) continue;  // 广告：mp4 直链跳过
                   var r = v.getBoundingClientRect();
                   var area = r.width * r.height;
                   if (area > bestArea) { bestArea = area; best = v; }
+                  if (!finiteDur(v) && area > liveArea) { liveArea = area; liveBest = v; }
                 }
+                if (liveBest) return liveBest;
                 if (best) return best;
-                // 还没布局（面积 0）：退回第一个可播放的
+                // 还没布局（面积 0）：退回第一个可播放的（同样跳过 mp4）
                 for (var j2 = 0; j2 < allV.length; j2++) {
-                  if (playableSrc(allV[j2])) return allV[j2];
+                  if (allV[j2] === exclude) continue;
+                  var ps2 = playableSrc(allV[j2]);
+                  if (ps2 && !isMp4Url(ps2)) return allV[j2];
                 }
                 return null;
-              }
-              // 把一个文档/根里所有 video（含 open shadowRoot 内的）收集起来
-              function addAllVideosFromDocOrRoot(docOrRoot, out) {
-                if (!docOrRoot) return;
-                // 普通子树里的 video
-                try {
-                  var vs = docOrRoot.querySelectorAll('video');
-                  for (var i = 0; i < vs.length; i++) out.push(vs[i]);
-                } catch (e) {}
-                // 每个可枚举的影子宿主都进一次 open shadow（嵌套也支持）：
-                // 1) scope 自己内部的影子宿主（递归进去后会再遍历到宿主下边的普通孩子）
-                // 2) document.documentElement 下的影子组件（某些播放器直接挂在 html 之下）
-                var seeds = [];
-                try { seeds.push(docOrRoot.documentElement); } catch (e) {}
-                try { seeds.push(docOrRoot.body); } catch (e) {}
-                for (var s = 0; s < seeds.length; s++) {
-                  if (!seeds[s]) continue;
-                  diveShadowSeeds(seeds[s], out);
-                }
-              }
-              function diveShadowSeeds(host, out) {
-                if (!host) return;
-                try {
-                  var kids = host.children;
-                  for (var i = 0; i < kids.length; i++) {
-                    var k = kids[i];
-                    tryPushVideo(k, out);
-                    if (k.shadowRoot) {
-                      // open shadow 里的 video
-                      try {
-                        var vs = k.shadowRoot.querySelectorAll('video');
-                        for (var j = 0; j < vs.length; j++) out.push(vs[j]);
-                      } catch (e) {}
-                      // shadow 里的 shadow host（嵌套组件）：再往里钻
-                      diveShadowSeeds(k.shadowRoot, out);
-                    }
-                    diveShadowSeeds(k, out);
-                  }
-                } catch (e) {}
-              }
-              function tryPushVideo(el, out) {
-                if (!el) return;
-                try { if (el.tagName === 'VIDEO' && el.src) out.push(el); } catch (e) {}
-                // 同一个元素可能已经被 document.querySelectorAll 收录过，重复不太重要，
-                // 但如果它有属性 src 大概率可播，不如再保一次（重复靠下游 playableSrc 过滤面积）
               }
               // 有些播放器第一次 play() 不生效（源还没挂上/内部状态没就绪），得再点一次。
               // 没播起来就隔 100ms 再 play()，最多 5 次；链路已在跑时不重复起。
@@ -2011,11 +2835,13 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 var s = (vv && vv.scale > 0) ? vv.scale : 1;
                 var k = (window.devicePixelRatio || 1) * s;
                 var dev = window.__tvDev;
+                // 向上取整：round 会算得比屏幕小不到 1px，那零点几像素是白底透出来的一条线；
+                // ceil 最多多铺不到 1px，多出去的部分被屏幕/overflow 裁掉，看不见
                 if (dev && dev.w > 0 && dev.h > 0 && k > 0) {
-                  return { w: Math.round(dev.w / k), h: Math.round(dev.h / k) };
+                  return { w: Math.ceil(dev.w / k), h: Math.ceil(dev.h / k) };
                 }
                 if (vv && vv.width > 0 && vv.height > 0) {
-                  return { w: Math.round(vv.width), h: Math.round(vv.height) };
+                  return { w: Math.ceil(vv.width), h: Math.ceil(vv.height) };
                 }
                 return null;
               }
@@ -2071,6 +2897,22 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   ' dpr=' + (window.devicePixelRatio || 1) +
                   ' scale=' + ((window.visualViewport && window.visualViewport.scale) || 1));
               }
+              // 把除当前铺满那一路以外的 video 全部静音（只看状态，不改播放/暂停）
+              function muteOthers(cur) {
+                var off = function (v) {
+                  if (!v || v === cur) return;
+                  try { if (!v.muted) v.muted = true; } catch (e) {}
+                };
+                try {
+                  var all = document.querySelectorAll('video');
+                  for (var i = 0; i < all.length; i++) off(all[i]);
+                } catch (e) {}
+                // 影子根里的那些不在 document 里（attachShadow 拦截时登记的清单）
+                try {
+                  var sh = window.__tvShadowVids || [];
+                  for (var j = 0; j < sh.length; j++) off(sh[j]);
+                } catch (e) {}
+              }
               // 播放器可能会反复重写 video 的行内样式，每次都要重新落实
               function applyStyles(el) {
                 el.style.setProperty('position', 'static', 'important');
@@ -2104,17 +2946,49 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 // 粉色是 video 元素边界——两个不重合就知道是谁偏了。
                 // object-fit:contain 时画面可能比元素框小一圈（上下或左右留黑），
                 // 所以粉色框可以对不上图像边缘，那不算 bug。
-                // 只在 DEBUG_FRAME_MARKERS 打开时才画。
+                // 只在配置页「开发者调试」的几何调试打开时才画。
                 if (DBG) el.style.setProperty('box-shadow', 'inset 0 0 0 4px #ff2d95', 'important');
                 bindVolume(el);
                 applyVolume(el);
               }
-              var v = pickVideo();
-              if (!v) return '0';
+              // 边界标记是单独一层覆盖物：绝对定位不参与 flex，也不占 wrap 的内盒。
+              // （以前用 wrap 自己的 border，把内盒缩掉一圈，测到的 video 矩形永远是缩过的）
+              // 开关实时变：DBG 为假时把已有标记撤掉，不用切台
+              function syncMark(wrap) {
+                var old = wrap.querySelector('[data-tvfs-mark]');
+                if (!DBG) { if (old) old.parentNode.removeChild(old); return; }
+                if (old) return;
+                var mk = document.createElement('div');
+                mk.setAttribute('data-tvfs-mark', '1');
+                mk.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;' +
+                  'pointer-events:none;box-shadow:inset 0 0 0 4px #00e5ff;';
+                wrap.appendChild(mk);
+              }
+              var cur = window.__tvFs;
+              // 当前全屏那个还活着吗（地址还在、没被暂停、没放完）
+              var curAlive = false;
+              if (cur && cur.el && cur.wrap && cur.wrap.parentNode) {
+                try { curAlive = !!playableSrc(cur.el) && !cur.el.paused && !cur.el.ended; }
+                catch (e) { curAlive = false; }
+              }
+              // 不管它死没死，都把 wrap 里那个从候选里排除。
+              // 它在 wrap 里量出来永远是满屏（851x393），不是它本来的尺寸：一旦参与比较，
+              // 要么赖着不走，要么被一个大一圈的页面元素顶掉又顶回来 —— 两种都是来回跳。
+              var v = pickVideo(cur && cur.el ? cur.el : null);
+              if (!v) {
+                if (!curAlive) return '0';
+                // 没别的候选：继续用现在这个
+                applyStyles(cur.el);
+                fitWrap(cur.wrap);
+                syncMark(cur.wrap);
+                tryPlay(cur.el);
+                return '1';
+              }
               // 第一时间开声音：不等容器建好、不等下一轮轮询
               bindVolume(v);
               applyVolume(v);
-              var cur = window.__tvFs;
+              var candRect = v.getBoundingClientRect();
+              var candArea = candRect.width * candRect.height;
               // 起播这几秒里可视区本身会反复变（播放器初始化、弹幕层、系统栏收起都改它），
               // 只靠一秒一轮的轮询，每轮都得带着错尺寸多撑一会儿，看着就是全屏“跳”两三下，
               // 而且跳不跳全看这些变化落在揭示前还是揭示后 —— 有时一打开就是对的。
@@ -2149,8 +3023,28 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               if (cur && cur.el === v && cur.wrap && cur.wrap.parentNode) {
                 applyStyles(v);
                 fitWrap(cur.wrap);
+                syncMark(cur.wrap);
                 // 播放器可能把 video 暂停了：每轮都确保在播
                 tryPlay(v);
+                return '1';
+              }
+
+              // 铺满之外的其他 video（广告/预览流）一律静音：
+              // 声音闸门在揭幕时就打开了，EARLY_MUTE_JS 那条不再管新出现的元素，
+              // 而选片这边只要当前这路还活着就不换片，新插进来的广告会自己带着声音播。
+              if (cur && cur.el) muteOthers(cur.el);
+
+              // 当前这个还在正常播：死也不换。
+              // 面积不能当判据——同一路视频量出来的面积跟桌面完全不同（广告容器在
+              // WebView 里没缩，广告的 1280x720 反而比直播的 800x450 大）。
+              // 只要现在这个画面是好的，就别让新冒出来的东西抢位；广告放完会自己停，
+              // 到那时 curAlive 变假，下一段逻辑才把位置交给直播。
+              // 不换就不会出现“广告 ↔ 直播”每秒来回跳、两路轮流出声。
+              if (cur && cur.wrap && cur.wrap.parentNode && curAlive) {
+                applyStyles(cur.el);
+                fitWrap(cur.wrap);
+                syncMark(cur.wrap);
+                tryPlay(cur.el);
                 return '1';
               }
 
@@ -2161,6 +3055,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 var newParent = v.parentNode, newNext = v.nextSibling, newCss = v.style.cssText;
                 try {
                   if (cur.el) {
+                    // 旧的那一路只静音、不暂停：静音就没有两路声音，画面又被全屏容器盖着看不见。
+                    // 暂停会让站点的广告系统认为“广告被打断”，转头再抢一次直播 ——
+                    // 站点那种循环（切广告→暂停广告→抢直播→切回）就是这么来的
+                    try { cur.el.muted = true; } catch (e) {}
                     cur.el.style.cssText = cur.css || '';
                     if (cur.parent) {
                       if (cur.next && cur.next.parentNode === cur.parent) {
@@ -2174,7 +3072,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   applyStyles(v);
                   fitWrap(cur.wrap);
                 } catch (e) { return '0'; }
-                window.__tvFs = { el: v, parent: newParent, next: newNext, css: newCss, wrap: cur.wrap };
+                window.__tvFs = { el: v, parent: newParent, next: newNext, css: newCss,
+                  wrap: cur.wrap, origArea: candArea,
+                  origW: candRect.width, origH: candRect.height };
+                syncMark(cur.wrap);
                 tryPlay(v);
                 console.log('[tvfs] switched video inside existing wrap');
                 return '1';
@@ -2183,20 +3084,24 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               // 还没有全屏容器：新建一个
               var wrap = document.createElement('div');
               wrap.setAttribute('data-tvfs', '1');
-              // 末尾那条 border 是调试用的“容器边界标记”（只在 DEBUG_FRAME_MARKERS 打开时画）。
-              // 用真 border + border-box 而不是 box-shadow/outline：后两者画在容器自身的
-              // 背景/描边层上，会被铺满的 video 子节点整个盖住（看不见）；真 border 占内盒，
-              // 画面会往里让一圈，但边界一定看得见。关掉开关就是干净画面。
+              // 容器的尺寸、定位全交给 fitWrap()。调试用的边界标记不画在容器自己身上：
+              // 容器自身的 border/box-shadow 会被铺满的 video 整个盖住（看不见），
+              // 而真 border 又会占内盒、把 video 挤进去一圈（测到的几何就不真了）。
               wrap.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;' +
                 'background:#000;z-index:2147483647;display:flex;align-items:center;' +
-                'justify-content:center;overflow:hidden;box-sizing:border-box;' +
-                (DBG ? 'border:12px solid #00e5ff;' : '');
+                'justify-content:center;overflow:hidden;box-sizing:border-box;';
               fitWrap(wrap);
 
-              var state = { el: v, parent: v.parentNode, next: v.nextSibling, css: v.style.cssText };
+              // 记下“进 wrap 之前”的面积：以后判断该不该换片，只能和这个比。
+              // 进 wrap 以后它永远是满屏，拿满屏面积当基准的话谁都换不动它
+              var preRect = v.getBoundingClientRect();
+              var state = { el: v, parent: v.parentNode, next: v.nextSibling, css: v.style.cssText,
+                origArea: preRect.width * preRect.height,
+                origW: preRect.width, origH: preRect.height };
               try {
                 wrap.appendChild(v);
                 applyStyles(v);
+                syncMark(wrap);
                 document.documentElement.appendChild(wrap);
               } catch (e) { return '0'; }
 
@@ -2209,8 +3114,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 临时诊断：把容器/视频/视口的几何数字打进日志，用来定位"容器偏上、下方一大块黑"。
-        // 只读不写，不改任何样式；移除时删掉这一整块和两处调用即可。
+        // 几何调试：把容器/视频/视口的几何数字打进日志，用来定位"容器偏上、下方一大块黑"。
+        // 只读不写，不改任何样式；开关是配置页「开发者调试」里的几何调试，默认关。
         val GEOM_PROBE_JS = """
             (function () {
               var s = window.__tvFs;
@@ -2313,6 +3218,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   if (document.documentElement) document.documentElement.style.overflow = lock.html;
                   if (document.body) document.body.style.overflow = lock.body;
                 }
+
                 if (s.el) s.el.style.cssText = s.css || '';
                 if (s.wrap && s.wrap.parentNode) s.wrap.parentNode.removeChild(s.wrap);
                 if (s.el && s.parent) {
@@ -2327,11 +3233,11 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 诊断：报告页面 URL / 文字 / iframe / 深层 video 状态，并试一次全屏看返回结果
+        // 诊断：报告页面 URL / 文字 / 深层 video 状态，并试一次全屏看返回结果
         val PROBE_JS = """
             (function () {
               var out = {
-                url: location.href, n: 0, vids: [], iframes: [], text: '', tc: '',
+                url: location.href, n: 0, vids: [], text: '', tc: '',
                 elems: 0, htmlLen: 0,
                 fsEnabled: document.fullscreenEnabled, fe: !!document.fullscreenElement
               };
@@ -2342,82 +3248,31 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   .replace(/\s+/g, ' ').slice(0, 500);
                 out.elems = document.querySelectorAll('*').length;
                 out.htmlLen = document.documentElement.outerHTML.length;
-                var fs = document.querySelectorAll('iframe');
-                for (var k = 0; k < fs.length; k++) {
-                  out.iframes.push((fs[k].getAttribute('src') || '').slice(0, 100));
-                }
-                var docs = [document];
-                for (var i = 0; i < docs.length; i++) {
-                  var d = docs[i];
-                  // 普通子树里的 video
-                  var vs = d.querySelectorAll('video');
-                  for (var j = 0; j < vs.length; j++) {
-                    var v = vs[j];
-                    out.n++;
-                    out.vids.push({
-                      src: (v.getAttribute('src') || v.src || '').slice(0, 48),
-                      paused: v.paused, w: v.videoWidth,
-                      wk: typeof v.webkitEnterFullscreen, rs: typeof v.requestFullscreen
-                    });
-                  }
-                  // 同源 iframe 里的 video（含影子里的）：顺便再统计一次
-                  var fr = d.querySelectorAll('iframe');
-                  for (var m = 0; m < fr.length; m++) {
-                    try {
-                      if (fr[m].contentDocument) {
-                        docs.push(fr[m].contentDocument);
-                        var subVs = fr[m].contentDocument.querySelectorAll('video');
-                        for (var s2 = 0; s2 < subVs.length; s2++) {
-                          var sv = subVs[s2];
-                          out.n++;
-                          out.vids.push({
-                            src: (sv.getAttribute('src') || sv.src || '').slice(0, 48),
-                            paused: sv.paused, w: sv.videoWidth,
-                            wk: typeof sv.webkitEnterFullscreen, rs: typeof sv.requestFullscreen
-                          });
-                        }
-                      }
-                    } catch (e) {}
-                  }
+                // 只统计主文档：iframe 里的 video 不参与选片，这里也不列
+                var vs = document.querySelectorAll('video');
+                for (var j = 0; j < vs.length; j++) {
+                  var v = vs[j];
+                  out.n++;
+                  out.vids.push({
+                    src: (v.getAttribute('src') || v.src || '').slice(0, 48),
+                    paused: v.paused, w: v.videoWidth,
+                    wk: typeof v.webkitEnterFullscreen, rs: typeof v.requestFullscreen
+                  });
                 }
               } catch (e) { out.err = '' + e; }
-              // 影子里的 video 也算进来（开放影子才行）：
-              // 遍历当前页面的所有影子宿主，递归统计影子树里的 video
+              // 影子根里的 video 也算进来：读 attachShadow 拦截时收集的那份清单
               (function () {
-                function walkForShadowVideo(host) {
-                  if (!host) return;
-                  try {
-                    var kids = host.children;
-                    for (var i2 = 0; i2 < kids.length; i2++) {
-                      var k = kids[i2];
-                      if (k.tagName === 'VIDEO') {
-                        var sv = k;
-                        out.n++;
-                        out.vids.push({
-                          src: (sv.getAttribute('src') || sv.src || '').slice(0, 48),
-                          paused: sv.paused, w: sv.videoWidth,
-                          wk: typeof sv.webkitEnterFullscreen, rs: typeof sv.requestFullscreen
-                        });
-                      }
-                      if (k.shadowRoot) {
-                        var vs3 = k.shadowRoot.querySelectorAll('video');
-                        for (var j3 = 0; j3 < vs3.length; j3++) {
-                          var sv2 = vs3[j3];
-                          out.n++;
-                          out.vids.push({
-                            src: (sv2.getAttribute('src') || sv2.src || '').slice(0, 48),
-                            paused: sv2.paused, w: sv2.videoWidth,
-                            wk: typeof sv2.webkitEnterFullscreen, rs: typeof sv2.requestFullscreen
-                          });
-                        }
-                        walkForShadowVideo(k.shadowRoot);
-                      }
-                      walkForShadowVideo(k);
-                    }
-                  } catch (e) {}
+                var shadowVids = window.__tvShadowVids || [];
+                for (var i2 = 0; i2 < shadowVids.length; i2++) {
+                  var sv = shadowVids[i2];
+                  if (!sv || sv.isConnected === false) continue;
+                  out.n++;
+                  out.vids.push({
+                    src: (sv.getAttribute('src') || sv.src || '').slice(0, 48),
+                    paused: sv.paused, w: sv.videoWidth,
+                    wk: typeof sv.webkitEnterFullscreen, rs: typeof sv.requestFullscreen
+                  });
                 }
-                walkForShadowVideo(document.documentElement);
-                walkForShadowVideo(document.body);
               })();
               var v0 = document.querySelector('video[src^="blob:"]') ||
                 document.querySelector('video');
@@ -2431,6 +3286,86 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 });
               }
               return JSON.stringify(out);
+            })();
+        """
+
+        // 退出确认的窗口：按一次返回后这么久没再按就当没按过，防止隔天再按一下就退出
+        const val EXIT_CONFIRM_MS = 2_000L
+
+        // 脚本注入后观察这么久：没要重复、没压黑幕就当它交差了（也给 holdCover 一个到达的窗口）
+        const val SCRIPT_GRACE_MS = 400L
+        // 闸门最多关这么久：脚本写挂了、选择器不对，也不能让画面一直等着
+        const val SCRIPT_GATE_MAX_MS = 20_000L
+        // 重复注入自己的上限：到时间或到轮数就停，别再往下跑
+        const val SCRIPT_REPEAT_MAX_MS = 20_000L
+        const val SCRIPT_REPEAT_MAX_ROUNDS = 120
+
+        /**
+         * 注入到页面里的 TV 接口。应用只提供这层通用能力，找元素/点按钮全在用户脚本里。
+         * 所有上报都走 TVNative 一个出口，原生那边再用 scriptCode 拦一道：
+         * 当前页没匹配到脚本时这些消息一律丢弃。
+         */
+        val TV_BOOT_JS = """
+            (function () {
+              var api = window.TV && window.TV.__tv ? window.TV : {};
+              function post(o) { try { TVNative.send(JSON.stringify(o)); } catch (e) {} }
+              // 下面几个只在脚本里用，不对外暴露（对外只留常用的几个）
+              function finish() { post({ t: 'done' }); }
+              function once(key, fn) {
+                window.__tvOnce = window.__tvOnce || {};
+                if (window.__tvOnce[key]) return;
+                window.__tvOnce[key] = 1;
+                try { fn(); } catch (e) { api.log('元素处理异常: ' + e); }
+              }
+              function click(el) {
+                try { if (el.scrollIntoView) el.scrollIntoView({ block: 'center' }); } catch (e) {}
+                try { el.click(); return true; } catch (e) { api.log('click 异常: ' + e); return false; }
+              }
+              // 切台前后的一对动作，只给 pick 用：压黑幕、切完放开
+              function holdCover() { post({ t: 'holdCover' }); }
+              function afterSwitch() { post({ t: 'afterSwitch' }); }
+              api.__tv = 1;
+              api.log = function (m) { post({ t: 'log', m: String(m) }); };
+              api.toast = function (m) { post({ t: 'toast', m: String(m) }); };
+              // 让应用再跑一轮（只给 wait 用，脚本自己不用管）
+              function retry(ms) { post({ t: 'repeat', ms: ms | 0 }); }
+              // 读地址里的参数：?i=3 和 #/live?id=3 都认，没有就是 null
+              api.param = function (name) {
+                function get(q) {
+                  try { return new URLSearchParams(q).get(name); } catch (e) { return null; }
+                }
+                var v = get(String(location.search || '').slice(1));
+                if (v != null) return v;
+                var h = String(location.hash || ''), at = h.indexOf('?');
+                return at >= 0 ? get(h.slice(at + 1)) : null;
+              };
+              // 等东西出现：参数是选择器，或者「返回元素/数组/真假值的函数」（等播放器就绪之类）
+              // 还没出现就稍后再跑一轮；出现后只调一次 fn(all)。重试有配额，写不出死循环。
+              api.wait = function (target, fn, key) {
+                var res = null;
+                try {
+                  res = typeof target === 'function' ? target()
+                    : [].slice.call(document.querySelectorAll(target));
+                } catch (e) { api.log('wait 异常: ' + e); }
+                if (res === true) res = [document];
+                if (res && !Array.isArray(res)) res = [res];
+                if (!res || !res.length) { retry(400); return false; }
+                once(key || ('wait:' + String(target).slice(0, 60)), function () { fn(res); });
+                return true;
+              };
+              // 页内切台一条龙：等到第 n 个入口，压黑幕、点它、报切完
+              api.pick = function (selector, index, key) {
+                var n = index == null ? NaN : parseInt(index, 10);
+                if (isNaN(n)) { api.log('地址里没有序号'); finish(); return; }
+                api.wait(selector, function (all) {
+                  var el = all[n];
+                  if (!el) { api.log('没有第 ' + n + ' 个入口'); finish(); return; }
+                  holdCover();
+                  api.log('切到第 ' + n + ' 个入口');
+                  if (click(el)) afterSwitch(); else finish();
+                }, key || ('pick:' + selector + ':' + n));
+              };
+              window.TV = api;
             })();
         """
 

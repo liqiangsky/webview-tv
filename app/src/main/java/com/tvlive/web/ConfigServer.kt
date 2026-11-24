@@ -138,6 +138,8 @@ class ConfigServer(
                 }
             method == "GET" && (path.isEmpty() || path == "config.html") -> sendPage(out)
             method == "GET" && path == "api/state" -> sendApi(out, pin) { stateJson() }
+            // 运行日志：配置页「日志」按钮直接用
+            method == "GET" && path == "api/log" -> sendApi(out, pin) { logJson() }
             method == "POST" && path.startsWith("api/") ->
                 sendApi(out, pin) { dispatch(path.removePrefix("api/"), parseJson(body)) }
             else -> sendText(out, 404, "text/plain; charset=utf-8", "not found")
@@ -401,7 +403,7 @@ class ConfigServer(
                     JSONObject()
                         .put("line", ch.line).put("name", ch.name)
                         .put("url", ch.url).put("logo", ch.logo)
-                        .put("quality", ch.quality)
+                        .put("quality", ch.quality).put("source", ch.source)
                 )
             }
             gs.put(JSONObject().put("name", g.name).put("channels", list))
@@ -413,15 +415,63 @@ class ConfigServer(
         val playing = hostProvider()?.playing()?.let {
             JSONObject().put("group", it.group).put("name", it.name).put("url", it.url)
         }
+        // 站点脚本条目 + 频道绑定，配置页一次拿到就够渲染了
+        val scriptsJson = JSONArray()
+        for (s in SiteScripts.all()) {
+            scriptsJson.put(
+                JSONObject().put("id", s.id).put("name", s.name).put("code", s.code)
+            )
+        }
+        val bindsJson = JSONObject()
+        for (ch in ChannelStore.groups().flatMap { it.channels }) {
+            val id = SiteScripts.bindOf(ch.url)
+            if (id.isNotEmpty()) bindsJson.put(ch.url, id)
+        }
         return JSONObject()
             .put("ok", true)
             .put("groups", gs)
             .put("logins", logins)
+            .put("scripts", scriptsJson)
+            .put("binds", bindsJson)
             .put("playing", playing ?: JSONObject.NULL)
             .put("remoteReady", remoteProvider() != null)
+            .put("dev", ChannelStore.devFlags())
             .put("device", android.os.Build.MODEL)
             .let { if (added >= 0) it.put("added", added) else it }
             .toString()
+    }
+
+    /** 节目单状态：加载了多少、当前源、覆盖到哪天、哪几个频道还没对上 */
+    private fun epgState(): String {
+        val st = EpgManager.status()
+        val custom = JSONArray()
+        for (s in EpgManager.customSources()) custom.put(s)
+        val missing = JSONArray()
+        for (g in ChannelStore.groups()) {
+            for (ch in g.channels) {
+                if (!EpgManager.hasGuide(ch.name) && !EpgManager.hasGuide(ch.logo)) {
+                    missing.put(JSONObject().put("name", ch.name).put("group", g.name))
+                }
+            }
+        }
+        val epg = JSONObject()
+            .put("loaded", st.loaded)
+            .put("attempted", st.attempted)
+            .put("source", st.source ?: JSONObject.NULL)
+            .put("coverage", st.coverage)
+            .put("channels", st.channels)
+            .put("names", st.names)
+            .put("stamp", st.stamp)
+            .put("custom", custom)
+            .put("missing", missing)
+        return JSONObject().put("ok", true).put("epg", epg).toString()
+    }
+
+    /** 最近的运行日志（内存环形区，进程退出即丢） */
+    private fun logJson(): String {
+        val arr = JSONArray()
+        for (line in TvLog.recent(300)) arr.put(line)
+        return JSONObject().put("ok", true).put("lines", arr).toString()
     }
 
     // ---------------- 写操作 ----------------
@@ -434,11 +484,15 @@ class ConfigServer(
 
         when (op) {
             "ch.add" -> return ChannelStore
-                .addChannel(arg.str("group"), arg.str("name"), arg.str("url"), arg.str("quality"))
+                .addChannel(
+                    arg.str("group"), arg.str("name"), arg.str("url"), arg.str("quality"),
+                    arg.str("source")
+                )
                 .fold({ stateJson() }, { fail(it.message ?: "添加失败") })
             "ch.upd" -> return ChannelStore.updateChannel(
                 arg.optInt("line", -1), arg.str("group"), arg.str("name"), arg.str("url"),
-                arg.str("newGroup"), arg.str("newName"), arg.str("newUrl"), arg.str("newQuality")
+                arg.str("newGroup"), arg.str("newName"), arg.str("newUrl"), arg.str("newQuality"),
+                arg.str("newSource")
             ).fold({ stateJson() }, { fail(it.message ?: "修改失败") })
             "ch.del" -> return ChannelStore.deleteChannel(
                 arg.optInt("line", -1), arg.str("group"), arg.str("name"), arg.str("url")
@@ -461,6 +515,21 @@ class ConfigServer(
             "login.upd" -> return ChannelStore.updateLogin(arg.str("oldUrl"), arg.str("name"), arg.str("url"))
                 .fold({ stateJson() }, { fail(it.message ?: "修改失败") })
             "pin.regenerate" -> return ok(JSONObject().put("pin", ChannelStore.regeneratePin()))
+            // 站点脚本：逐条增删改（配置页列表式管理），以及频道 → 脚本的绑定
+            "script.add" -> return SiteScripts
+                .add(arg.str("name"), arg.str("code"))
+                .fold({ stateJson() }, { fail(it.message ?: "新建失败") })
+            "script.upd" -> return SiteScripts
+                .update(arg.str("id"), arg.str("name"), arg.str("code"))
+                .fold({ stateJson() }, { fail(it.message ?: "保存失败") })
+            "script.del" -> return SiteScripts.remove(arg.str("id"))
+                .fold({ stateJson() }, { fail(it.message ?: "删除失败") })
+            "script.bind" -> return SiteScripts.bind(arg.str("url"), arg.str("id"))
+                .fold({ stateJson() }, { fail(it.message ?: "绑定失败") })
+            // 开发者调试开关：改完回整份状态，配置页的开关跟着服务端值走，不在前端猜
+            "dev.set" -> return runCatching {
+                ChannelStore.setDevFlag(arg.str("name"), arg.optBoolean("value"))
+            }.fold({ stateJson() }, { fail(it.message ?: "保存失败") })
             "play" -> {
                 val ch = Channel(
                     arg.str("name"), arg.str("url"), arg.optInt("line", -1),
@@ -469,6 +538,40 @@ class ConfigServer(
                 // 回最新状态：配置页靠它把「播放中」标到刚点的这一行
                 return if (onMain { hostProvider()?.play(ch.group, ch.name, ch.url) == true })
                     stateJson() else fail("电视当前不在播放页")
+            }
+            "epg.state" -> return epgState()
+            "epg.refresh" -> {
+                // 立即拉一次，不等结果：XMLTV 几 MB，网页这边更新看状态就行
+                EpgManager.refreshNow(context) { }
+                return ok()
+            }
+            "epg.src.add" -> return if (EpgManager.addSource(arg.str("url"))) epgState()
+                else fail("地址要以 http 开头，或已经加过了")
+            "epg.src.use" -> {
+                if (!EpgManager.useSource(arg.str("url"))) return fail("没找到这个源")
+                // 切完立刻拉一次：状态里的「当前源」不刷新就看不出来切没切成功
+                EpgManager.refreshNow(context) { }
+                return epgState()
+            }
+            "epg.src.del" -> {
+                if (!EpgManager.removeSource(arg.str("url"))) return fail("没找到这个源")
+                return epgState()
+            }
+            "cache.list" -> {
+                val stats = ScriptCache.stats(context)
+                val arr = JSONArray()
+                for (s in stats) {
+                    arr.put(
+                        JSONObject().put("host", s.host).put("count", s.count)
+                            .put("size", s.size).put("last", s.last)
+                    )
+                }
+                return ok(JSONObject().put("domains", arr).put("total", ScriptCache.total(stats)))
+            }
+            "cache.clear" -> {
+                // host 为空 = 全部清；本来就没有也算清好了，别让页面弹个没意义的错
+                ScriptCache.clear(context, arg.str("host"))
+                return ok()
             }
             "login.open" -> {
                 val url = arg.str("url")

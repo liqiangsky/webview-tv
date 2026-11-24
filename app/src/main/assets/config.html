@@ -22,6 +22,8 @@
     --fill: rgba(118, 118, 128, .12);
     --chrome: rgba(242, 242, 247, .86); --scrim: rgba(0, 0, 0, .34);
     --toast: rgba(0, 0, 0, .78); --toast-fg: #fff;
+    /* 字号只留四档：主文字 / 次级（按钮、输入、计数）/ 说明 / 小标与代码 */
+    --fs-1: 17px; --fs-2: 15px; --fs-3: 13px; --fs-4: 12px;
   }
   :root.dark {
     --bg: #000; --card: #1c1c1e; --card2: #2c2c2e;
@@ -62,38 +64,48 @@
     min-height: 46px; padding: 8px 10px; background: var(--chrome);
     -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
     border-bottom: 1px solid var(--sep); }
-  .navbar h2 { margin: 0 auto; font-size: 17px; font-weight: 600; }
+  .navbar h2 { margin: 0 auto; font-size: var(--fs-1); font-weight: 600; }
   .navbar .side { flex: 1; display: flex; align-items: center; gap: 10px; }
   .navbar .side.r { justify-content: flex-end; }
-  .back { background: none; border: 0; color: var(--accent); font: inherit; font-size: 17px;
+  .back { background: none; border: 0; color: var(--accent); font: inherit; font-size: var(--fs-1);
     display: flex; align-items: center; padding: 6px 10px 6px 4px; flex: none; }
   .back::before { content: ''; width: 7px; height: 7px; border-left: 2px solid currentColor;
     border-top: 2px solid currentColor; transform: rotate(-45deg); margin-right: 4px; }
   .back:active { opacity: .45; }
   .pmain { padding: 0 16px 40px; }
+  /* 带底部操作条的页：页自己竖排，只有中间那片滚，操作条永远贴在底边（内容多少都不跑位） */
+  .page.hasfoot { display: flex; flex-direction: column; overflow: hidden; }
+  .page.hasfoot > .navbar { flex: none; }
+  .page.hasfoot > .pmain { flex: 1; min-height: 0; overflow-y: auto;
+    -webkit-overflow-scrolling: touch; padding-bottom: 16px; }
+  .footbar { flex: none; position: relative; z-index: 2;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 1px solid var(--sep); }
+  .footbar .act-full { margin: 0; }
   /* 搜索条：吸在子页顶栏下面，系统设置同款灰底圆角 + 左侧放大镜 */
   .subbar { position: sticky; top: 46px; z-index: 1; padding: 8px 16px 10px;
     background: var(--chrome); -webkit-backdrop-filter: saturate(180%) blur(20px);
     backdrop-filter: saturate(180%) blur(20px); }
   .find { position: relative; }
   .find input { width: 100%; background: var(--fill); border: 0; border-radius: 10px;
-    padding: 8px 34px 8px 30px; font-size: 16px; color: var(--fg); }
+    padding: 8px 34px 8px 30px; font-size: var(--fs-2); color: var(--fg); }
   .find input:focus { outline: none; }
   .find .mag { position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
     width: 15px; height: 15px; stroke: var(--dim); fill: none; stroke-width: 2.2;
     stroke-linecap: round; pointer-events: none; }
   .find .x { position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
     width: 19px; height: 19px; border-radius: 50%; background: var(--dim); color: var(--bg);
-    border: 0; font-size: 12px; line-height: 1; padding: 0; }
+    border: 0; font-size: var(--fs-4); line-height: 1; padding: 0; }
   .find .n { position: absolute; right: 32px; top: 50%; transform: translateY(-50%);
-    font-size: 12px; color: var(--dim); }
+    font-size: var(--fs-4); color: var(--dim); }
   /* 卡片外的小标题（首页、表单用） */
   .sec { display: flex; align-items: center; gap: 7px; margin: 20px 6px 6px;
-    font-size: 13px; color: var(--dim); }
+    font-size: var(--fs-3); color: var(--dim); }
   .pmain > .sec:first-child { margin-top: 12px; }
-  .sec b { color: var(--dim2); font-weight: 600; font-size: 13px; }
+  .sec b { color: var(--dim2); font-weight: 600; font-size: var(--fs-3); }
   .sec .sp { flex: 1; }
-  .cnt { color: var(--dim); font-size: 13px; }
+  .cnt { color: var(--dim); font-size: var(--fs-3); }
   .group { background: var(--card); border-radius: 10px; overflow: hidden; margin-top: 16px; }
   /* 频道分组：组名做成卡片自己的第一行，点一下整组收起 */
   .fold { width: 13px; height: 13px; stroke: var(--dim); fill: none; stroke-width: 2.4;
@@ -104,7 +116,7 @@
   .ghead::after { content: ''; position: absolute; left: 14px; right: 0; bottom: 0;
     height: 1px; background: var(--sep); }
   .ghead:active { background: var(--card2); }
-  .ghead b { font-size: 15px; font-weight: 600; color: var(--dim2); min-width: 0;
+  .ghead b { font-size: var(--fs-2); font-weight: 600; color: var(--dim2); min-width: 0;
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .ghead .cnt { margin-left: auto; padding-left: 8px; }
   .sect { margin-top: 16px; }
@@ -120,70 +132,99 @@
   .row:active { background: var(--card2); }
   .row.noact:active { background: none; }
   .row .txt { flex: 1; min-width: 0; }
-  .row .nm { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .row .u { font-size: 12px; color: var(--dim); margin-top: 3px; white-space: nowrap;
+  .row .nm { font-size: var(--fs-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .u { font-size: var(--fs-3); color: var(--dim); margin-top: 3px; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0; }
   /* 名称后面的小标签：清晰度用灰底，正在播放用主色 */
   .tag { display: inline-block; vertical-align: 2px; margin-left: 7px; padding: 3px 6px;
-    border-radius: 5px; background: var(--fill); color: var(--dim2); font-size: 11px;
+    border-radius: 5px; background: var(--fill); color: var(--dim2); font-size: var(--fs-4);
     font-weight: 600; line-height: 1; letter-spacing: 0; }
   .tag.live { background: var(--accent); color: #fff; }
   .row.playing .nm { color: var(--accent); }
   .chev { width: 7px; height: 7px; border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim);
     transform: rotate(-45deg); flex: none; margin-left: 2px; opacity: .7; }
-  /* 蓝色文字动作；破坏性一律红；都是 17pt 系统字号 */
-  .lnk { background: none; border: 0; color: var(--accent); font: inherit; font-size: 17px;
+  /* 行里的说明文字：比 .u 松（.u 是等宽地址、不折行），开关项下面那几行用它 */
+  .row .note { font-size: var(--fs-3); color: var(--dim); margin-top: 3px; line-height: 1.45;
+    white-space: normal; }
+  /* 开关：纯 CSS 画的，形状走系统开关那一套，不依赖 <input> 的原生外观 */
+  .sw { position: relative; flex: none; width: 51px; height: 31px; padding: 0; border: 0;
+    border-radius: 980px; background: var(--fill); transition: background .18s; }
+  .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+    transition: transform .18s cubic-bezier(.3, .7, 0, 1); }
+  .sw[aria-checked="true"] { background: #34c759; }
+  .sw[aria-checked="true"]::after { transform: translateX(20px); }
+  .sw:active { opacity: .8; }
+  /* 蓝色文字动作；破坏性一律红 */
+  .lnk { background: none; border: 0; color: var(--accent); font: inherit; font-size: var(--fs-1);
     padding: 8px 4px; margin: -8px -4px; white-space: nowrap; }
   .lnk:active { opacity: .45; }
-  .lnk.sm { font-size: 15px; padding: 6px 4px; margin: -6px -4px; }
+  .lnk.sm { font-size: var(--fs-2); padding: 6px 4px; margin: -6px -4px; }
   .lnk.danger { color: var(--danger); }
   .lnk.b { font-weight: 600; }
   /* 就地确认态：第一次点变红底「确认」，再点才真删 */
   .warn { background: var(--danger); color: #fff !important; font-weight: 600; border-radius: 980px; }
-  .lnk.warn { font-size: 13px; padding: 5px 10px; margin: -5px -4px; }
-  .q { font-size: 15px; color: var(--dim2); white-space: nowrap; overflow: hidden;
+  .lnk.warn { font-size: var(--fs-3); padding: 5px 10px; margin: -5px -4px; }
+  .q { font-size: var(--fs-2); color: var(--dim2); white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; }
-  .empty { color: var(--dim); text-align: center; padding: 40px 24px; line-height: 1.8; font-size: 15px; }
+  .empty { color: var(--dim); text-align: center; padding: 40px 24px; line-height: 1.8;
+    font-size: var(--fs-2); }
   /* 表单行：标题在左、输入在右，和系统设置的编辑页一致 */
   .frow { position: relative; display: flex; align-items: center; gap: 12px; padding: 11px 16px; }
   .frow:last-child::after { content: none; }
   .frow::after { content: ''; position: absolute; left: 16px; right: 0; bottom: 0;
     height: 1px; background: var(--sep); }
-  .frow label { flex: none; width: 62px; font-size: 16px; color: var(--fg); margin: 0; }
+  .frow label { flex: none; width: 62px; font-size: var(--fs-2); color: var(--fg); margin: 0; }
   .frow input { flex: 1; min-width: 0; background: none; border: 0; color: var(--fg);
-    font: inherit; font-size: 16px; padding: 2px 0; }
+    font: inherit; font-size: var(--fs-2); padding: 2px 0; }
   .frow input:focus { outline: none; }
   /* 下拉：去掉系统外观，跟同行的输入框一样只剩一行文字加箭头 */
   .frow select { flex: 1; min-width: 0; appearance: none; -webkit-appearance: none;
-    background: none; border: 0; color: var(--fg); font: inherit; font-size: 16px; padding: 2px 0; }
+    background: none; border: 0; color: var(--fg); font: inherit; font-size: var(--fs-2);
+    padding: 2px 0; }
   .frow select:focus { outline: none; }
   .frow select.ph { color: var(--dim); }
   .frow .caret { flex: none; width: 0; height: 0; border: 5px solid transparent;
     border-top: 6px solid var(--dim); margin-top: 3px; }
   .frow.col { flex-direction: column; align-items: stretch; gap: 6px; }
   .frow.col label { width: auto; }
+  /* 输入 + 主按钮的同一行：放卡片里，输入框用浅底，不再拆成「标签/输入/按钮」三行 */
+  .frow.addin { gap: 8px; }
+  .frow.addin input { flex: 1; min-width: 0; background: var(--fill); border: 0; border-radius: 10px;
+    padding: 10px 12px; font-size: var(--fs-2); font-family: inherit; color: var(--fg); }
+  .frow.addin input::placeholder { color: var(--dim); }
+  .frow.addin input:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .frow.addin .go { flex: none; background: var(--accent); color: #fff; border: 0;
+    border-radius: 10px; padding: 10px 16px; font-size: var(--fs-2); font-family: inherit;
+    font-weight: 600; }
+  .frow.addin .go:active { transform: scale(.96); opacity: .75; }
   textarea { width: 100%; background: var(--card); color: var(--fg); border: 0;
     border-radius: 10px; padding: 12px 14px; min-height: 200px; margin-top: 16px;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 13px; line-height: 1.6; letter-spacing: 0; }
+    font-size: var(--fs-3); line-height: 1.6; letter-spacing: 0; }
   textarea:focus { outline: none; }
-  .hint { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 10px 6px 0; }
+  .hint { color: var(--dim); font-size: var(--fs-3); line-height: 1.6; margin: 10px 6px 0; }
+  /* 运行日志：等宽小字、可滚动，贴底看最新一条 */
+  .logbody { margin: 0; padding: 12px 14px; max-height: 58vh; overflow: auto; color: var(--dim2);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: var(--fs-4);
+    line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
   /* 快捷选项：点一下就用，遥控键和导入模式这类二选一 */
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 6px 0; }
   .chip { background: var(--fill); border: 0; color: var(--dim2); border-radius: 980px;
-    padding: 6px 13px; font-size: 14px; font-family: inherit; transition: all .15s; }
+    padding: 6px 13px; font-size: var(--fs-2); font-family: inherit; transition: all .15s; }
   .chip.on { background: var(--accent); color: #fff; font-weight: 600; }
   .chip:active { transform: scale(.95); }
   /* 整行的主操作和破坏性操作，铺满卡片宽 */
   .act-full { display: block; width: 100%; border: 0; border-radius: 10px; margin: 16px 0 0;
-    padding: 13px; font: inherit; font-size: 17px; text-align: center; }
+    padding: 13px; font: inherit; font-size: var(--fs-1); text-align: center; }
   .act-full:active { opacity: .6; }
   .act-full.pri { background: var(--accent); color: #fff; font-weight: 600; }
   .act-full.danger { background: var(--card); color: var(--danger); }
   .act-full.warn { background: var(--danger); color: #fff; border-radius: 10px; }
   /* 破坏性操作的二次确认说明：只在按下一次「删除」后出现 */
-  .warnline { color: var(--danger); font-size: 13px; line-height: 1.5; margin: 10px 6px 0; }
+  .warnline { color: var(--danger); font-size: var(--fs-3); line-height: 1.5;
+    margin: 10px 6px 0; }
   /* 弹层：遮罩淡入、面板从底部升起；点空白处即关 */
   .mask { position: fixed; inset: 0; background: var(--scrim); z-index: 20;
     display: flex; align-items: flex-end; justify-content: center;
@@ -200,31 +241,31 @@
   /* 编辑页顶栏：左取消、中标题、右保存 */
   .nav { display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 6px 0 14px; }
-  .nav h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .nav h2 { margin: 0; font-size: var(--fs-1); font-weight: 600; }
   #toast { position: fixed; left: 50%; bottom: 42px; transform: translateX(-50%);
     background: var(--toast); color: var(--toast-fg); padding: 10px 17px; border-radius: 980px;
-    font-size: 15px; opacity: 0; transition: opacity .22s; pointer-events: none; z-index: 30;
+    font-size: var(--fs-2); opacity: 0; transition: opacity .22s; pointer-events: none; z-index: 30;
     max-width: 90vw; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
   #toast.on { opacity: 1; }
   #toast.bad { background: rgba(255,69,58,.96); }
-  .pinrow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
-  .pinrow b { color: var(--fg); font-size: 15px; letter-spacing: .14em; font-weight: 600; }
+  .pinrow { display: flex; align-items: center; gap: 8px; font-size: var(--fs-3); color: var(--dim); }
+  .pinrow b { color: var(--fg); font-size: var(--fs-2); letter-spacing: .14em; font-weight: 600; }
   /* 遥控页的省地方三件套：连接状态挂顶栏、能贴标题行的控件不另起一排、输入框和主操作同行 */
   .rcst { display: flex; align-items: center; gap: 6px; flex: none; margin-right: 2px;
-    font-size: 12px; color: var(--dim); }
+    font-size: var(--fs-4); color: var(--dim); }
   .rcst i { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none;
     transition: background .2s; }
   .rcst i.ok { background: #34c759; }
   .rcst i.wait { background: #ff9f0a; }
   .rcst i.bad { background: var(--danger); }
-  .sec .mini { padding: 4px 11px; font-size: 12px; }
-  .chip.key.sq { min-width: 34px; padding: 4px 8px; font-size: 16px; line-height: 1.4; }
+  .sec .mini { padding: 4px 11px; font-size: var(--fs-4); }
+  .chip.key.sq { min-width: 34px; padding: 4px 8px; font-size: var(--fs-2); line-height: 1.4; }
   .inrow { display: flex; align-items: center; gap: 8px; margin: 10px 6px 0; }
   .inrow input { flex: 1; min-width: 0; background: var(--card); border: 0; border-radius: 10px;
-    padding: 10px 12px; font-size: 15px; color: var(--fg); box-shadow: inset 0 0 0 1px var(--sep); }
+    padding: 10px 12px; font-size: var(--fs-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--sep); }
   .inrow input:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--accent); }
   .inrow .go { flex: none; background: var(--accent); color: #fff; border: 0; border-radius: 10px;
-    padding: 10px 15px; font-size: 15px; font-family: inherit; font-weight: 600; }
+    padding: 10px 15px; font-size: var(--fs-2); font-family: inherit; font-weight: 600; }
   .inrow .go:active { transform: scale(.96); opacity: .75; }
   /* 电视遥控：触控板是一块圆角卡片。touch-action:none 只加在这一块上，
      否则浏览器先抢手势（滚动、双指缩放），累积到的位移就是断断续续的，光标跟不住手指 */
@@ -240,11 +281,11 @@
     pointer-events: none; }
   .pad.moved .dot { opacity: .95; }
   .pad .tip { position: absolute; left: 0; right: 0; bottom: 12px; text-align: center;
-    font-size: 12px; color: var(--dim); pointer-events: none; }
+    font-size: var(--fs-4); color: var(--dim); pointer-events: none; }
   .pad .off { position: absolute; inset: 0; display: flex; align-items: center;
-    justify-content: center; font-size: 15px; color: var(--dim2);
+    justify-content: center; font-size: var(--fs-2); color: var(--dim2);
     background: var(--chrome); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
-  .chip.key { min-width: 66px; text-align: center; padding: 9px 13px; font-size: 15px;
+  .chip.key { min-width: 66px; text-align: center; padding: 9px 13px; font-size: var(--fs-2);
     background: var(--card); color: var(--fg); box-shadow: inset 0 0 0 1px var(--sep); }
   .chip.key:active { transform: scale(.96); opacity: .5; }
   .chip.key.on { background: var(--accent); color: #fff; font-weight: 600; }
@@ -254,6 +295,20 @@
   .st i.ok { background: #34c759; }
   .st i.wait { background: #ff9f0a; }
   .st i.bad { background: var(--danger); }
+  /* 脚本接口帮助页：一条接口占一块，说明跟在名字下面换行排，不截断 */
+  .doc .drow { position: relative; padding: 11px 16px; }
+  .doc .drow::after { content: ''; position: absolute; left: 16px; right: 0; bottom: 0;
+    height: 1px; background: var(--sep); }
+  .doc .drow:last-child::after { content: none; }
+  .doc .dnm { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: var(--fs-2); letter-spacing: 0; }
+  .doc .ddesc { margin-top: 5px; color: var(--dim2); font-size: var(--fs-3); line-height: 1.65; }
+  .doc .ddesc code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: var(--fs-4); letter-spacing: 0; background: var(--fill); border-radius: 4px;
+    padding: 1px 4px; }
+  .codeblk { margin: 8px 0 0; padding: 12px 14px; background: var(--card); border-radius: 10px;
+    overflow: auto; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: var(--fs-4); line-height: 1.7; letter-spacing: 0; white-space: pre; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -285,6 +340,18 @@
       <span class="q" id="cntCh"></span><span class="chev"></span></div>
     <div class="row" data-page="login"><div class="txt"><div class="nm">网站登录</div></div>
       <span class="q" id="cntLogin"></span><span class="chev"></span></div>
+    <div class="row" data-page="script"><div class="txt"><div class="nm">站点脚本</div></div>
+      <span class="q" id="cntScript"></span><span class="chev"></span></div>
+    <div class="row" data-page="cache"><div class="txt"><div class="nm">脚本缓存</div></div>
+      <span class="q" id="cntCache"></span><span class="chev"></span></div>
+    <div class="row" data-page="epg"><div class="txt"><div class="nm">节目单</div></div>
+      <span class="q" id="cntEpg"></span><span class="chev"></span></div>
+  </div>
+
+  <div class="sec"><b>设置</b></div>
+  <div class="group">
+    <div class="row" data-page="dev"><div class="txt"><div class="nm">开发者调试</div></div>
+      <span class="q" id="cntDev"></span><span class="chev"></span></div>
   </div>
 </main>
 
@@ -301,7 +368,7 @@
   </div>
   <div class="subbar"><div class="find">
     <svg class="mag" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-    <input id="find" placeholder="搜索频道、分组或地址" autocomplete="off">
+    <input id="find" autocomplete="off">
     <span class="n" id="findN"></span>
     <button class="x" id="findX" hidden>✕</button>
   </div></div>
@@ -323,9 +390,6 @@
   </div>
   <div class="pmain">
     <div class="group" id="loginList"></div>
-    <div class="hint">点条目右侧「打开」，电视会全屏打开这个网址并等手机遥控——点按钮、输账号密码
-      用「电视遥控」页的触控板。登录完按电视左下角「关闭」（或返回键）退出，电视会自动重播刚才那个台。<br>
-      点条目本身可以改名称或地址。</div>
   </div>
 </div>
 
@@ -353,7 +417,7 @@
       <button class="chip key sq" data-zk="0">1×</button>
       <button class="chip key sq" data-zk="1">＋</button></div>
     <div class="sec"><b>输入框</b></div>
-    <div class="inrow"><input id="rcText" placeholder="写内容，留空即清空">
+    <div class="inrow"><input id="rcText">
       <button class="go" id="rcSend">替换</button></div>
   </div>
 </div>
@@ -367,8 +431,79 @@
   </div>
   <div class="pmain">
     <div class="group" id="groupList"></div>
-    <div class="hint">改名会带着组里的频道一起改；删组会连组里的频道一起删。
-      分组不能是空的，新建时保存名称后会接着让你填第一个频道。</div>
+  </div>
+</div>
+
+<div class="page" id="p-dev" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>开发者调试</h2>
+    <span class="side r"></span>
+  </div>
+  <div class="pmain">
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">拦截图片/字体</div>
+        <div class="note">不加载图片和字体，省流量</div></div>
+        <button class="sw" role="switch" data-dev="blockStyle" aria-checked="true"></button></div>
+      <div class="row noact"><div class="txt"><div class="nm">脚本本地缓存</div>
+        <div class="note">网页 JS 存本地，进台更快</div></div>
+        <button class="sw" role="switch" data-dev="scriptCache" aria-checked="true"></button></div>
+      <div class="row noact"><div class="txt"><div class="nm">视频状态浮层</div>
+        <div class="note">左下角显示视频地址和状态</div></div>
+        <button class="sw" role="switch" data-dev="videoOverlay" aria-checked="false"></button></div>
+      <div class="row noact"><div class="txt"><div class="nm">几何调试</div>
+        <div class="note">画边框并记录实际尺寸</div></div>
+        <button class="sw" role="switch" data-dev="frameMarkers" aria-checked="false"></button></div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-epg" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>节目单</h2>
+    <span class="side r"><button class="lnk sm" id="epgReload">刷新</button></span>
+  </div>
+  <div class="pmain">
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">当前源</div>
+        <div class="u" id="epgSource">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">覆盖到</div>
+        <div class="u" id="epgCoverage">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">上次更新</div>
+        <div class="u" id="epgStamp">—</div></div>
+        <button class="lnk" id="epgGo">立即更新</button></div>
+    </div>
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">自定义节目源</div>
+        <div class="note">XMLTV 地址（.xml 或 .xml.gz）。节目单只认你配的源，
+          不配置就是空的。</div></div></div>
+      <div class="frow addin">
+        <input id="epgUrl" inputmode="url"
+          autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="go" id="epgAdd">添加</button></div>
+      <div id="epgSrcList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="page hasfoot" id="p-cache" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>脚本缓存</h2>
+    <span class="side r"><button class="lnk sm" id="cacheReload">刷新</button></span>
+  </div>
+  <div class="pmain">
+    <div class="sec"><b>按频道域名分组</b><span class="sp"></span>
+      <span class="cnt" id="cacheSum"></span></div>
+    <div class="hint" style="margin-top:0">一个台常常从好几个 CDN 拉 JS，都算在这个台的域名下；
+      清一行就是这个台全清，下次进台重新下载。</div>
+    <div class="group">
+      <div id="cacheList"></div>
+    </div>
+  </div>
+  <div class="footbar">
+    <button class="act-full danger" id="cacheClearAll">全部清除</button>
   </div>
 </div>
 
@@ -379,17 +514,154 @@
     <span class="side r"></span>
   </div>
   <div class="pmain">
-    <textarea id="impText" placeholder="我的频道,#genre#
-频道A,https://example.com/a.m3u8
-频道B,https://example.com/b.m3u8"></textarea>
+    <textarea id="impText"></textarea>
     <div class="chips">
       <button class="chip on" id="modeAppend">追加（同名同地址跳过）</button>
       <button class="chip" id="modeReplace">覆盖（清空现有再导入）</button>
     </div>
     <div class="hint">格式：分组名独占一行并以 <code>,#genre#</code> 结尾；频道一行一个
-      <code>名称,地址[,节目别名,清晰度]</code>（第三列只用来对节目单）。</div>
+      <code>名称,地址</code>。后面多写的列会被忽略。</div>
     <button class="act-full pri" id="impGo">导入</button>
     <button class="act-full danger" id="clearAll">清空全部频道</button>
+  </div>
+</div>
+
+<div class="page" id="p-script" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>站点脚本</h2>
+    <span class="side r">
+      <button class="ib" data-page="help" aria-label="脚本接口"><svg viewBox="0 0 24 24">
+        <path d="M9.2 9.1a2.9 2.9 0 015.7.7c0 2-2.9 2.3-2.9 4.2"/>
+        <path d="M12 17.8v.1"/></svg></button>
+      <button class="ib" id="scriptAdd" aria-label="新建脚本"><svg viewBox="0 0 24 24">
+        <path d="M12 5.5v13M5.5 12h13"/></svg></button>
+    </span>
+  </div>
+  <div class="pmain">
+    <div class="group" id="scriptList"></div>
+    <div class="hint">
+      一条脚本 = 一个名字 + 一段 JS。在编辑条目时选中它，那个网址才会跑；
+      执行时机和接口见右上角「？」。
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-help" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>脚本接口</h2>
+    <span class="side r"></span>
+  </div>
+  <div class="pmain">
+    <div class="sec"><b>什么时候跑</b></div>
+    <div class="hint" style="margin-top:0">
+      只跑在你绑定到它的网址上；没绑的页面里没有 <code>TV</code>。
+      同一段脚本会反复跑：DOM 就绪、播放器铺满、地址变了、<code>TV.wait</code> 还在等东西时。
+      所以只登记状态，有副作用的动作放进 <code>TV.wait</code> 回调；脚本报错只记一行日志，不影响播放。
+    </div>
+
+    <div class="sec"><b>闸门：什么时候才轮到播放</b></div>
+    <div class="hint" style="margin-top:0">
+      绑了脚本的页面，开头有一段「脚本时间」：不接管页面 video、不揭幕、不开声（黑幕本来就盖着）。
+      这一轮没再等东西 → 400 毫秒后放行；<code>TV.pick</code> 点完也会报「切完了」立刻放行。
+      重试和脚本时间都有上限（约 20 秒 / 120 轮），到点强制放行，不会一直黑屏。
+    </div>
+
+    <div class="sec"><b>接口</b><span class="sp"></span><span class="cnt">5 个</span></div>
+    <div class="group doc">
+      <div class="drow"><div class="dnm">TV.pick(selector, index)</div>
+        <div class="ddesc">页内点选一条龙：等第 <code>index</code> 个入口出现 → 压黑幕 → 点它 → 报完成。
+          没序号或越界就收工，按页面默认内容走。</div></div>
+      <div class="drow"><div class="dnm">TV.wait(selector, fn, key)</div>
+        <div class="ddesc">等东西出现，出现后只调一次 <code>fn(元素数组)</code>；
+          参数可以是选择器，也可以是返回元素/真假值的函数。
+          <code>key</code> 可选，同一页 wait 多个东西时区分用。</div></div>
+      <div class="drow"><div class="dnm">TV.param(name)</div>
+        <div class="ddesc">读地址参数（<code>?i=3</code>、<code>#/live?id=3</code> 都认），没有回 <code>null</code>。</div></div>
+      <div class="drow"><div class="dnm">TV.log(m)</div>
+        <div class="ddesc">写一行运行日志，列表里的「日志」能看到（<code>console</code> 不进日志）。</div></div>
+      <div class="drow"><div class="dnm">TV.toast(m)</div>
+        <div class="ddesc">电视屏幕底部提示一句，两秒后消失。</div></div>
+    </div>
+
+    <div class="sec"><b>用法：该用 pick 还是 wait</b></div>
+    <div class="hint" style="margin-top:0">
+      • <code>TV.pick</code>：点列表第 N 项就完成，一行写完；<br>
+      • <code>TV.wait</code>：还有别的步骤（先展开列表再点），或要等的是状态（播放器就绪）就用它；<br>
+      • 页面默认就播对了：两个都不用。<br>
+      两者自带重试和去重，不用写循环、也不用写收尾。
+    </div>
+
+    <div class="sec"><b>例子：一个页面里点选第 N 项</b></div>
+    <pre class="codeblk">// 地址只差 ?i=N（从 0 开始），整段脚本就两行：
+TV.pick('#programMain .item', TV.param('i'));</pre>
+    <div class="hint">
+      参数名换成 <code>TV.param('ch')</code>、选择器换成那个站的入口就能用。
+    </div>
+
+    <div class="sec"><b>例子：步骤多一点的点选</b></div>
+    <pre class="codeblk">// 比如要先点开一个列表才能看到入口：等列表按钮 → 点开 → 再等入口 → 点它
+var i = TV.param('i');
+if (i == null) return;              // 没带序号就不动页面
+TV.wait('#openList', function (els) {
+  els[0].click();                   // 展开列表
+  TV.wait('.item', function (items) {
+    items[+i].click();              // 点完就交回应用，不用写收尾
+  }, 'items');
+}, 'open');</pre>
+
+    <div class="sec"><b>例子：手写完整流程</b></div>
+    <pre class="codeblk">// 一个网页里有很多可选项：每个选项一条地址、只差 URL 参数，都绑这一段脚本；
+// 脚本读参数，自己去点该选的那一条
+var ch = TV.param('ch');          // 换成你的参数名
+if (ch != null) {
+  // 等入口渲染出来再点；只点一次由 wait 保证
+  TV.wait('.item', function (items) {
+    items[+ch].click();           // 后来交回应用：全屏、等新流真出首帧才揭幕
+  });
+} else {
+  TV.log('地址里没有参数，按页面默认内容走');
+}</pre>
+
+    <div class="sec"><b>注意</b></div>
+    <div class="hint">
+      别用 <code>title</code> 判断点选成功，很多站换了内容它也不变。<br>
+      换一个地址就是重新加载页面，脚本要尽快点完，别让脚本时间拖满 20 秒。<br>
+      起播时页面是静音的，别拿声音判断播没播起来。
+    </div>
+  </div>
+</div>
+
+<div class="mask" id="scrMask" hidden>
+  <div class="sheet">
+    <div class="nav">
+      <button class="lnk" id="scCancel">取消</button>
+      <h2 id="scrTitle">新建脚本</h2>
+      <button class="lnk b" id="scSave">保存</button>
+    </div>
+    <div class="group">
+      <div class="frow"><label>名称</label><input id="scName" autocomplete="off"></div>
+    </div>
+    <textarea id="scCode" class="code" spellcheck="false" autocapitalize="off" autocorrect="off"
+      placeholder="// 地址只差 ?i=N：等入口出现、点它、完成报一声，全交给 TV.pick&#10;TV.pick('换成入口的选择器', TV.param('i'));"></textarea>
+    <div class="chips" style="margin:10px 14px 0">
+      <button class="chip" id="scTpl">插入模板</button>
+    </div>
+    <button class="act-full danger" id="scDel" hidden>删除该脚本</button>
+  </div>
+</div>
+
+<div class="mask" id="logMask" hidden>
+  <div class="sheet">
+    <div class="nav"><span></span><h2 id="logTitle">运行日志</h2>
+      <button class="lnk b" id="logClose">关闭</button></div>
+    <div class="hint" id="logHint" style="margin:0 14px 10px"></div>
+    <pre class="logbody" id="logBody">加载中…</pre>
+    <div class="chips" style="margin:0 14px 14px">
+      <button class="chip" id="logRefresh">刷新</button>
+      <button class="chip on" id="logAuto">自动刷新</button>
+    </div>
   </div>
 </div>
 
@@ -398,7 +670,7 @@
     <div class="nav"><span></span><h2>配对电视</h2>
       <button class="lnk b" id="pinCancel">稍后</button></div>
     <div class="group"><div class="frow"><label>配对码</label>
-      <input id="pinInput" inputmode="numeric" maxlength="4" placeholder="4 位数字"></div></div>
+      <input id="pinInput" inputmode="numeric" maxlength="4"></div></div>
     <div class="hint">配对码显示在电视的「设置 → 配对二维码」页面里。</div>
     <button class="act-full pri" id="pinOk">确定</button>
   </div>
@@ -412,12 +684,15 @@
       <button class="lnk b" id="eSave">保存</button>
     </div>
     <div class="group">
-      <div class="frow"><label>名称</label><input id="eName" placeholder="频道A"></div>
+      <div class="frow"><label>名称</label><input id="eName"></div>
       <div class="frow"><label>分组</label><select id="eGroup"></select><span class="caret"></span></div>
-      <div class="frow"><label>清晰度</label><select id="eQuality"></select><span class="caret"></span></div>
+      <div class="frow"><label>清晰度</label><input id="eQuality" autocomplete="off"></div>
+      <div class="frow"><label>来源</label><input id="eSource" autocomplete="off"></div>
       <div class="frow col"><label>播放地址</label>
-        <input id="eUrl" inputmode="url" placeholder="https://..."></div>
+        <input id="eUrl" inputmode="url"></div>
+      <div class="frow"><label>脚本</label><select id="eScript"></select><span class="caret"></span></div>
     </div>
+    <div class="hint" id="eScriptHint" hidden>这个频道换个地址后要重新确认一下脚本。</div>
     <button class="act-full danger" id="eDel" hidden>删除该频道</button>
   </div>
 </div>
@@ -430,9 +705,9 @@
       <button class="lnk b" id="lSave">保存</button>
     </div>
     <div class="group">
-      <div class="frow"><label>名称</label><input id="lnName" placeholder="网站账号" autocomplete="off"></div>
+      <div class="frow"><label>名称</label><input id="lnName" autocomplete="off"></div>
       <div class="frow col"><label>地址</label>
-        <input id="lnUrl" inputmode="url" placeholder="https://example.com/login"></div>
+        <input id="lnUrl" inputmode="url"></div>
     </div>
     <div class="hint">漏了协议会按 https 补上；看着不像能打开的网址会被拦下。</div>
   </div>
@@ -446,7 +721,7 @@
       <button class="lnk b" id="gSave">保存</button>
     </div>
     <div class="group"><div class="frow"><label>名称</label>
-      <input id="gName" placeholder="我的频道" autocomplete="off"></div></div>
+      <input id="gName" autocomplete="off"></div></div>
     <div class="warnline" id="gWarn" hidden></div>
     <button class="act-full danger" id="gDel" hidden>删除该分组</button>
   </div>
@@ -458,7 +733,6 @@
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
-  var QUALITIES = ['HD', '标清', '超清', '4K'];
   var state = null;
   // 编辑中的原条目：null 表示新增；否则保存时走 ch.upd
   var editing = null;
@@ -521,7 +795,7 @@
   }
 
   function sig(s) {
-    return JSON.stringify([s.device, s.playing && s.playing.url, s.groups, s.logins]);
+    return JSON.stringify([s.device, s.playing && s.playing.url, s.groups, s.logins, s.dev]);
   }
 
   function apply(s) {
@@ -543,14 +817,32 @@
     $('pinShow').textContent = pin() || '----';
     $('cntCh').textContent = state.groups.reduce(function (n, g) { return n + g.channels.length; }, 0);
     $('cntLogin').textContent = state.logins.length ? String(state.logins.length) : '';
+    var sc = state.scripts || [];
+    $('cntScript').textContent = sc.length ? String(sc.length) : '';
     // WebSocket 没连上时（没打开遥控页），状态跟着 api 回显走，首页那行才不是瞎报的
     if (!wsLive && typeof state.remoteReady === 'boolean') tvReady = state.remoteReady;
     renderRemote();
     renderChannels();
     renderGroups();
     renderLogins();
+    renderScripts();
+    renderDev();
     // 弹层没开着就别动下拉：重排选项会打断正在选的那个原生选择器
-    if (!$('editMask').hidden) renderPicks($('eQuality').value);
+    if (!$('editMask').hidden) renderPicks();
+  }
+
+  /** 开发者调试开关：页面上那几个 .sw 的当前状态，以服务端为准 */
+  function renderDev() {
+    if (!state) return;
+    var dev = state.dev || {};
+    var on = 0;
+    var list = document.querySelectorAll('[data-dev]');
+    for (var i = 0; i < list.length; i++) {
+      var v = !!dev[list[i].dataset.dev];
+      list[i].setAttribute('aria-checked', v ? 'true' : 'false');
+      if (v) on++;
+    }
+    $('cntDev').textContent = on ? String(on) : '';
   }
 
   function collapsed() {
@@ -593,13 +885,16 @@
       var isFold = g.channels.length && !q && fold.indexOf(g.name) >= 0;
       var rows = g.channels.map(function (ch) {
         var on = ch.url === playing;
-        var tag = ch.quality && ch.quality !== 'HD'
-          ? '<span class="tag">' + esc(ch.quality) + '</span>' : '';
+        // 有值就显示，HD 也不例外；留空则不出角标
+        var tag = ch.quality ? '<span class="tag">' + esc(ch.quality) + '</span>' : '';
+        // 来源是自由备注：填了才显示，免得空标签占位
+        if (ch.source) tag += '<span class="tag">' + esc(ch.source) + '</span>';
         return '<div class="row' + (on ? ' playing' : '') + '" data-edit="' + esc(ch.line) + '">' +
           '<div class="txt"><div class="nm">' + esc(ch.name) + tag +
             (on ? '<span class="tag live">播放中</span>' : '') + '</div>' +
             '<div class="u">' + esc(ch.url) + '</div></div>' +
           (on ? '' : '<button class="lnk" data-play="' + esc(ch.line) + '">播</button>') +
+          '<button class="lnk" data-log="' + esc(ch.line) + '">日志</button>' +
           '<span class="chev"></span></div>';
       }).join('');
       if (!g.channels.length)
@@ -644,8 +939,8 @@
     }).join('');
   }
 
-  /** 分组、清晰度的下拉：选项按当前状态现拼，选中项标出来 */
-  function renderPicks(quality) {
+  /** 分组下拉：选项按当前状态现拼，选中项标出来 */
+  function renderPicks() {
     var has = state.groups.length;
     $('eGroup').innerHTML = '<option value="" disabled hidden' + (editGroup ? '' : ' selected') + '>'
       + (has ? '请选择分组' : '还没有分组，保存后归到「其他频道」') + '</option>'
@@ -653,13 +948,6 @@
           return '<option' + (g.name === editGroup ? ' selected' : '') + '>' + esc(g.name) + '</option>';
         }).join('');
     $('eGroup').classList.toggle('ph', !editGroup);
-    var q = (quality || '').trim() || 'HD';
-    var qs = QUALITIES.slice();
-    // 页面里已有别的写法（例如「1080P」），选项里没有就补一条，免得保存时被改掉
-    if (qs.indexOf(q) < 0) qs.unshift(q);
-    $('eQuality').innerHTML = qs.map(function (x) {
-      return '<option' + (x === q ? ' selected' : '') + '>' + esc(x) + '</option>';
-    }).join('');
   }
 
   function findChannel(line) {
@@ -703,8 +991,8 @@
   }
 
   document.body.addEventListener('click', function (ev) {
-    var t = ev.target.closest('[data-page],[data-play],[data-edit],[data-lopen],[data-ldel],[data-ledit],' +
-      '[data-gedit],[data-fold],[data-rk],[data-zk],[data-back]');
+    var t = ev.target.closest('[data-page],[data-play],[data-log],[data-edit],[data-lopen],[data-ldel],[data-ledit],' +
+      '[data-gedit],[data-fold],[data-rk],[data-zk],[data-back],[data-dev]');
     if (!t) return;
     var d = t.dataset;
     function act(op, body, msg) {
@@ -716,6 +1004,13 @@
       hide(pg);
     } else if (d.page != null) {
       show($('p-' + d.page));
+      if (d.page === 'cache') loadCache();
+      if (d.page === 'epg') loadEpg();
+    } else if (d.dev != null) {
+      // 开关先本地翻转一下，手感即时；服务端回包再由 renderDev 校回真实值
+      var on = t.getAttribute('aria-checked') !== 'true';
+      t.setAttribute('aria-checked', on ? 'true' : 'false');
+      act('dev.set', { name: d.dev, value: on }, on ? '已开启' : '已关闭');
     } else if (d.rk != null) {
       if (d.rk === 'close') {
         if (!wsLive) { toast('还没连上电视', true); return; }
@@ -728,6 +1023,9 @@
       } else remoteKey(d.rk);
     } else if (d.zk != null) {
       remoteZoom(+d.zk);
+    } else if (d.log != null) {
+      // 频道行上的日志：只看这个频道这一次播放以来的那几行
+      openLog(d.log);
     } else if (d.play != null) {
       var p = findChannel(d.play);
       if (p) act('play', { group: p.g, name: p.ch.name, url: p.ch.url, line: p.ch.line }, '电视已切台');
@@ -743,7 +1041,7 @@
         openWs();
       }).catch(function () {});
     } else if (d.ldel != null) {
-      arm(t, '确认', function () { act('login.del', { url: d.ldel }, '已删除'); });
+      arm(t, '确认删', function () { act('login.del', { url: d.ldel }, '已删除'); });
     } else if (d.ledit != null) {
       openLogin(d.ledit);
     } else if (d.gedit != null) {
@@ -757,6 +1055,290 @@
     }
   });
 
+  // ---------------- 节目单 ----------------
+
+  /** 时间戳说人话：刚刚 / N 分钟前 / N 小时前 / 月日 时:分 */
+  function fmtWhen(ts) {
+    if (!ts) return '还没成功拉过';
+    var s = (Date.now() - ts) / 1000;
+    if (s < 60) return '刚刚';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
+      ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  function loadEpg() {
+    api('epg.state').then(function (r) {
+      var e = r.json && r.json.ok ? r.json.epg : null;
+      if (!e) return;
+      $('epgSource').textContent = e.source || '—';
+      $('epgCoverage').textContent = e.coverage || '—';
+      $('epgStamp').textContent = fmtWhen(e.stamp);
+      $('cntEpg').textContent = e.channels ? e.channels + ' 台' : '';
+      var custom = e.custom || [];
+      $('epgSrcList').innerHTML = custom.length ? custom.map(function (s) {
+        // 在用 = 这一轮真正供给了节目的源，跟频道行的「播放中」一样标出来
+        var on = e.source === s;
+        return '<div class="row noact"><div class="txt"><div class="u" style="margin:0">' +
+          esc(s) + (on ? '<span class="tag live">在用</span>' : '') + '</div></div>' +
+          (on ? '' : '<button class="lnk" data-epguse="' + esc(s) + '">用</button>') +
+          '<button class="lnk danger" data-epgdel="' + esc(s) + '">删</button></div>';
+      }).join('') : '<div class="row noact"><div class="txt"><div class="note">'
+        + '还没配置源，节目单是空的。</div></div></div>';
+    }).catch(function () {});
+  }
+
+  // 地址填完直接回车，等于点旁边的「添加」
+  $('epgUrl').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); $('epgAdd').click(); }
+  });
+
+  document.body.addEventListener('click', function (ev) {
+    var t = ev.target.closest('#epgReload,#epgGo,#epgAdd,[data-epguse],[data-epgdel]');
+    if (!t) return;
+    if (t.id === 'epgReload') { loadEpg(); return; }
+    if (t.id === 'epgGo') {
+      // 拉一次 XMLTV 要一会儿，先回个话，状态稍后自己刷新
+      api('epg.refresh').then(function () {
+        toast('已开始更新，过一会儿点「刷新」看结果');
+      }).catch(function () {});
+      return;
+    }
+    if (t.id === 'epgAdd') {
+      var u = $('epgUrl').value.trim();
+      if (!u) { toast('先填地址', true); return; }
+      api('epg.src.add', { url: u }).then(function (r) {
+        if (r.json && r.json.ok) { $('epgUrl').value = ''; toast('已添加'); loadEpg(); }
+        else toast((r.json && r.json.err) || '添加失败', true);
+      }).catch(function () {});
+      return;
+    }
+    // 快捷切换：跟频道行的「播」一样，点一下就把这个源挪到第一位并立即拉一次
+    if (t.dataset.epguse != null) {
+      api('epg.src.use', { url: t.dataset.epguse }).then(function (r) {
+        if (r.json && r.json.ok) { toast('已切换，正在更新'); loadEpg(); }
+        else toast((r.json && r.json.err) || '切换失败', true);
+      }).catch(function () {});
+      return;
+    }
+    // 删源也要二次确认：跟别处的「删」一样，点一下变「确认删」，再点才真删
+    arm(t, '确认删', function () {
+      api('epg.src.del', { url: t.dataset.epgdel }).then(function (r) {
+        if (r.json && r.json.ok) { toast('已删除'); loadEpg(); }
+        else toast((r.json && r.json.err) || '删除失败', true);
+      }).catch(function () {});
+    });
+  });
+
+  // ---------------- 脚本缓存 ----------------
+
+  function fmtSize(n) {
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return Math.round(n / 1024) + ' KB';
+    return n + ' B';
+  }
+
+  /** 最近使用时间说人话：刚刚 / N 分钟前 / N 小时前 / N 天前 / 月日 */
+  function fmtAgo(ts) {
+    if (!ts) return '—';
+    var s = (Date.now() - ts) / 1000;
+    if (s < 60) return '刚刚';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+    if (s < 7 * 86400) return Math.floor(s / 86400) + ' 天前';
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+
+  /** 各域名的缓存占用：打开「开发者调试」时拉一次，清完再拉一次 */
+  function loadCache() {
+    api('cache.list').then(function (r) {
+      var j = r.json;
+      if (!j || !j.ok) return;
+      var list = j.domains || [];
+      $('cacheSum').textContent = list.length
+        ? list.length + ' 个域名 / ' + fmtSize(j.total || 0) : '空';
+      $('cntCache').textContent = list.length ? fmtSize(j.total || 0) : '';
+      $('cacheList').innerHTML = list.length ? list.map(function (d) {
+        return '<div class="row noact"><div class="txt"><div class="nm">' + esc(d.host) + '</div>' +
+          '<div class="u">' + d.count + ' 个文件 · ' + fmtSize(d.size) +
+            ' · 最近 ' + fmtAgo(d.last) + '</div></div>' +
+          '<button class="lnk danger" data-cache="' + esc(d.host) + '">删</button></div>';
+      }).join('') : '<div class="row noact"><div class="txt">'
+        + '<div class="note">还没有脚本缓存。</div></div></div>';
+    }).catch(function () {});
+  }
+
+  document.body.addEventListener('click', function (ev) {
+    var b = ev.target.closest('#cacheReload,#cacheClearAll,[data-cache]');
+    if (!b) return;
+    if (b.id === 'cacheReload') { loadCache(); return; }
+    var host = b.dataset.cache;
+    var body = host != null ? { host: host } : {};
+    // 同样走就地二次确认，清完之后这里重画列表，确认态自然消失
+    arm(b, '确认删', function () {
+      api('cache.clear', body).then(function (r) {
+        if (r.json && r.json.ok) {
+          toast(host != null ? '已清除 ' + host : '已清空脚本缓存');
+          loadCache();
+        } else toast((r.json && r.json.err) || '清除失败', true);
+      }).catch(function () {});
+    });
+  });
+
+  // ---------------- 运行日志 ----------------
+
+  var logTimer = null;
+  // 弹窗是不是真的开着：show() 的 .on 类要下一帧才加上，hide() 又晚 300ms 才补 hidden，
+  // 这两个都不能当开关用，否则不是开不了刷新就是关不掉刷新
+  var logOpen = false;
+  var logUrl = '';    // 从哪个频道的行点开的；空串 = 看全部
+  function openLog(line) {
+    var ch = findChannel(line);
+    logUrl = ch ? ch.ch.url : '';
+    $('logTitle').textContent = ch ? ch.ch.name + ' 的日志' : '运行日志';
+    // 没在播的那个频道也没有这轮日志，直说，不要给人看一堆别人的
+    var on = ch && state && state.playing && state.playing.url === ch.ch.url;
+    $('logHint').textContent = !ch ? '' : (on ? '' : '这个频道现在没在播，下面是最近的全部日志');
+    logOpen = true;
+    show($('logMask'));
+    fetchLog();
+    syncLogTimer();
+  }
+  function fetchLog() {
+    // 弹窗没开就别请求：定时器可能刚被关掉，还在路上的那一拍也算
+    if (!logOpen) return;
+    fetch('api/log', { headers: { 'X-Pin': pin() } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || !j.lines) return;
+        var lines = j.lines;
+        // 应用每次换台记一条「▶ 播放 <地址>」，从这条往后就是这一轮的日志
+        if (logUrl) {
+          var mark = '▶ 播放 ' + logUrl;
+          for (var i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].indexOf(mark) >= 0) { lines = lines.slice(i); break; }
+          }
+        }
+        var el = $('logBody');
+        var atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 24;
+        el.textContent = lines.length ? lines.join('\n') : '（暂无日志）';
+        if (atBottom) el.scrollTop = el.scrollHeight;
+      }).catch(function () {});
+  }
+  // 关弹窗只停定时器，不动「自动刷新」这个开关：下次点开日志照旧自动刷新
+  $('logClose').onclick = function () {
+    logOpen = false;
+    syncLogTimer();
+    hide($('logMask'));
+  };
+  $('logRefresh').onclick = fetchLog;
+  $('logAuto').onclick = function () {
+    $('logAuto').classList.toggle('on');
+    syncLogTimer();
+  };
+  // 自动刷新：面板开着才跑，关掉就停，别在后台一直请求。
+  // logOpen 是同步翻转的开关（不是 .on / hidden 这两个带延迟的样式状态）
+  function syncLogTimer() {
+    var on = $('logAuto').classList.contains('on') && logOpen;
+    if (on && !logTimer) logTimer = setInterval(fetchLog, 2000);
+    else if (!on && logTimer) { clearInterval(logTimer); logTimer = null; }
+  }
+
+  // ---------------- 站点脚本 ----------------
+
+  var editingScript = null;   // null = 新建
+
+  function renderScripts() {
+    var list = (state && state.scripts) || [];
+    var host = $('scriptList');
+    if (!host) return;
+    if (!list.length) {
+      host.innerHTML = '<div class="empty" style="padding:26px">还没有脚本<br>点右上角「新建」写一条，再在条目里选它</div>';
+      return;
+    }
+    // 每条脚本标一下有几个频道点名用它，免得删了才干知道有人用
+    var use = {};
+    var binds = (state && state.binds) || {};
+    Object.keys(binds).forEach(function (u) { use[binds[u]] = (use[binds[u]] || 0) + 1; });
+    host.innerHTML = list.map(function (s) {
+      var tag = use[s.id] ? '<span class="tag">' + use[s.id] + ' 处使用</span>' : '';
+      return '<div class="row" data-scr="' + esc(s.id) + '">' +
+        '<div class="txt"><div class="nm">' + esc(s.name) + tag + '</div>' +
+          '<div class="u">' + s.code.split('\n').length + ' 行 JS</div></div>' +
+        '<span class="chev"></span></div>';
+    }).join('');
+  }
+
+  function openScript(id) {
+    var s = id ? ((state.scripts || []).filter(function (x) { return x.id === id; })[0]) : null;
+    editingScript = s || null;
+    $('scrTitle').textContent = s ? '编辑脚本' : '新建脚本';
+    $('scName').value = s ? s.name : '';
+    $('scCode').value = s ? s.code : '';
+    $('scDel').hidden = !s;
+    disarm($('scDel'));
+    show($('scrMask'));
+    if (!s) $('scName').focus();
+  }
+
+  document.body.addEventListener('click', function (ev) {
+    var t = ev.target.closest('[data-scr]');
+    if (t) { openScript(t.getAttribute('data-scr')); }
+  });
+
+  $('scriptAdd').onclick = function () { openScript(null); };
+  $('scCancel').onclick = function () { hide($('scrMask')); };
+  $('scSave').onclick = function () {
+    var name = $('scName').value.trim();
+    var code = $('scCode').value;
+    if (!code.trim()) { toast('脚本内容不能为空', true); return; }
+    if (!name) { toast('给脚本起个名字，绑定时才好选', true); return; }
+    var op = editingScript ? 'script.upd' : 'script.add';
+    var body = editingScript
+      ? { id: editingScript.id, name: name, code: code }
+      : { name: name, code: code };
+    api(op, body).then(handle).then(function () {
+      hide($('scrMask'));
+      toast(editingScript ? '已保存' : '已新建');
+    }).catch(function () {});
+  };
+  $('scDel').onclick = function () {
+    var s = editingScript;
+    if (!s) return;
+    arm(this, '确认删除', function () {
+      api('script.del', { id: s.id }).then(handle).then(function () {
+        hide($('scrMask'));
+        toast('已删除，原来用它的网址会回到「不使用脚本」');
+      }).catch(function () {});
+    });
+  };
+  $('scTpl').onclick = function () {
+    var t = $('scCode');
+    t.value = (t.value.trim() ? t.value.replace(/\s*$/, '') + '\n\n' : '') +
+      '// 一个网页多个可选项：每个选项一个地址、只差 URL 参数，都绑这一段脚本\n' +
+      '// 等入口出现 → 压黑幕 → 点它 → 报「切完」都由 TV.pick 包了；// 参数名换成你自己的\n' +
+      'TV.pick(\'换成本站第 N 项的选择器\', TV.param(\'i\'));\n';
+    toast('模板已插入，改掉选择器再保存');
+  };
+
+  /** 频道编辑弹层里的脚本下拉：不使用 / 具体某条（不自动挑，用户自己选） */
+  function renderScriptPick(url) {
+    var sel = $('eScript');
+    if (!sel) return;
+    var list = (state && state.scripts) || [];
+    var bound = ((state && state.binds) || {})[url] || '';
+    if (!list.some(function (s) { return s.id === bound; })) bound = 'none';
+    var html = '<option value="none">不使用脚本</option>' +
+      list.map(function (s) {
+        return '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>';
+      }).join('');
+    sel.innerHTML = html;
+    sel.value = bound;
+  }
+
   function openEdit(hit) {
     editing = hit || null;
     $('editTitle').textContent = hit ? '编辑频道' : '添加频道';
@@ -766,7 +1348,12 @@
     $('eUrl').value = hit ? hit.ch.url : '';
     $('eDel').hidden = !hit;
     disarm($('eDel'));
-    renderPicks(hit ? hit.ch.quality : 'HD');
+    // 清晰度是自由文本：老数据里的写法（「1080P」之类）原样填进去，不改成选项
+    // 添加时不预填清晰度：留空就不写这一列，面板上也不显示
+    $('eQuality').value = hit ? hit.ch.quality : '';
+    $('eSource').value = hit ? (hit.ch.source || '') : '';
+    renderPicks();
+    renderScriptPick(hit ? hit.ch.url : '');
     show($('editMask'));
     if (!hit) $('eName').focus();
   }
@@ -818,7 +1405,7 @@
     var old = editingGroup;
     if (!old) return;
     var self = this;
-    arm(this, '再点一次确认', function () {
+    arm(this, '确认删除', function () {
       api('group.del', { name: old }).then(function (r) {
         handle(r);
         hide($('groupMask'));
@@ -845,16 +1432,30 @@
   };
   $('eSave').onclick = function () {
     var name = $('eName').value.trim(), group = editGroup;
+    // 清晰度可以留空：留空就存空，面板上不显示
     var url = $('eUrl').value.trim(), quality = $('eQuality').value.trim();
+    var source = $('eSource').value.trim();
     if (!name || !url) { toast('名称和地址都要填', true); return; }
     if (!group && state.groups.length) { toast('先选一个分组', true); return; }
     var op = editing ? 'ch.upd' : 'ch.add';
     var body = editing
       ? { line: editing.ch.line, group: editing.g, name: editing.ch.name, url: editing.ch.url,
-          newGroup: group, newName: name, newUrl: url, newQuality: quality }
-      : { group: group, name: name, url: url, quality: quality };
-    api(op, body).then(function (r) {
-      handle(r);
+          newGroup: group, newName: name, newUrl: url, newQuality: quality, newSource: source }
+      : { group: group, name: name, url: url, quality: quality, source: source };
+    var oldUrl = editing ? editing.ch.url : '';
+    var want = $('eScript').value || 'none';
+    api(op, body).then(handle).then(function () {
+      var chain = Promise.resolve();
+      // 地址改过就把旧地址上的绑定清掉，不然会留一条指向不存在频道的记录
+      if (oldUrl && oldUrl !== url) {
+        chain = chain.then(function () { return api('script.bind', { url: oldUrl, id: '' }); }).then(handle);
+      }
+      var now = ((state && state.binds) || {})[url] || '';
+      if (want !== now) {
+        chain = chain.then(function () { return api('script.bind', { url: url, id: want }); }).then(handle);
+      }
+      return chain;
+    }).then(function () {
       hide($('editMask'));
       toast(editing ? '已保存' : '已添加');
     }).catch(function () {});
@@ -869,7 +1470,12 @@
 
   // 点遮罩空白处关掉弹层
   Array.prototype.forEach.call(document.querySelectorAll('.mask'), function (m) {
-    m.addEventListener('click', function (ev) { if (ev.target === m) hide(m); });
+    m.addEventListener('click', function (ev) {
+      if (ev.target !== m) return;
+      hide(m);
+      // 日志弹窗是点空白关掉的：自动刷新得跟着停，否则 2 秒一次的 api/log 会一直跑
+      if (m.id === 'logMask') { logOpen = false; syncLogTimer(); }
+    });
   });
 
   $('addCh').onclick = function () { openEdit(null); };
@@ -1213,7 +1819,8 @@
   }, 6000);
 
   setTheme(document.documentElement.classList.contains('dark'));
-  if (!pin()) askPin(); else refresh(false);
+  // 缓存占用顺手拿一次：管理列表里那行不用点进去就能看到已用多少
+  if (!pin()) askPin(); else { refresh(false); loadCache(); loadEpg(); }
 })();
 </script>
 </body>
