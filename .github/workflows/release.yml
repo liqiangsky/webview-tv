@@ -119,5 +119,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APP_VERSION_NAME: ${{ steps.ver.outputs.name }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.apk \
-            --title "v$APP_VERSION_NAME" --generate-notes
+          # Release 可能已经手动建过了（比如先在网页上写好说明），那就只补/换 APK，
+          # 不要因为同名 Release 存在就让整个打包流程失败。
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在，覆盖上传 APK"
+            gh release upload "$GITHUB_REF_NAME" dist/*.apk --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.apk \
+              --title "v$APP_VERSION_NAME" --generate-notes
+          fi
