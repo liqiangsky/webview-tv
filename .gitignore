@@ -3,8 +3,8 @@
 build/
 local.properties
 # 正式签名的密钥库和它的 base64：只进 GitHub Secret，绝不进仓库
-release.jks
-release.jks.b64
+keystore/
+keystore/password.txt
 *.jks
 *.keystore
 .idea/
