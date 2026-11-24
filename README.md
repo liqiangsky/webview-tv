@@ -63,8 +63,8 @@ adb push channels.txt /sdcard/Android/data/com.inweb.tv/files/channels.txt
 直播页左下角会列出页面上每个视频的地址和播放状态；其余开关（UA、资源拦截、脚本缓存等）也在同一处，
 每个常量上都有注释。
 
-日志统一用 `TvWeb` 标签：
+日志统一用 `InWeb` 标签：
 
 ```bash
-adb logcat -s TvWeb
+adb logcat -s InWeb
 ```

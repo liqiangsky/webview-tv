@@ -28,7 +28,7 @@ import java.util.zip.GZIPInputStream
  * 内存里只留“昨天 ~ 未来 26 小时”的切片，查询按频道名归一化后二分。
  */
 object EpgManager {
-    private const val TAG = "TvWeb"
+    private const val TAG = "InWeb"
 
     private const val UPDATE_HOUR = 0
     private const val UPDATE_MIN = 25

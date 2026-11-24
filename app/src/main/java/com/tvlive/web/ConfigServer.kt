@@ -600,7 +600,7 @@ class ConfigServer(
     private fun JSONObject.str(key: String): String = optString(key, "").trim()
 
     companion object {
-        private const val TAG = "TvWeb"
+        private const val TAG = "InWeb"
         @Volatile private var pageCache: ByteArray? = null
 
         // WebSocket 帧

@@ -2371,7 +2371,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     }
 
     companion object {
-        const val TAG = "TvWeb"
+        const val TAG = "InWeb"
 
         // 起播超时：点台后这么久还没等到视频首帧，就把黑幕改成错误屏
         const val PLAY_TIMEOUT_MS = 15_000L

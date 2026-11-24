@@ -17,6 +17,6 @@ class EpgReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        const val TAG = "TvWeb"
+        const val TAG = "InWeb"
     }
 }
