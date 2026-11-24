@@ -3,6 +3,11 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// 版本号：打 tag 构建时由 CI 传 -PversionName=1.2.3 -PversionCode=10203，本地不传就用默认值
+// （versionCode 必须随版本递增，否则同签名的升级装不上）
+def buildVersionName = (findProperty('versionName') ?: '1.0').toString()
+def buildVersionCode = (findProperty('versionCode') ?: '1').toString().toInteger()
+
 android {
     // namespace 只是源码包名（Kotlin 的 package 跟它走），applicationId 才是应用身份：
     // 它决定桌面图标认的是哪个应用、数据落在 /sdcard/Android/data/<applicationId>/、
@@ -14,14 +19,31 @@ android {
         applicationId "com.inweb.tv"
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode buildVersionCode
+        versionName buildVersionName
+    }
+
+    // 正式签名：CI 把仓库 Secret 里的 keystore 解成文件，用环境变量把路径/口令传进来。
+    // 密钥本身不进仓库；本地没这些变量时不配签名，assembleRelease 出来的就是未签名包。
+    signingConfigs {
+        release {
+            def ks = System.getenv('KEYSTORE_FILE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                // PKCS12 的密钥口令通常就是仓库口令，没单独给就重用
+                keyPassword System.getenv('KEY_PASSWORD') ?: System.getenv('KEYSTORE_PASSWORD')
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // 有签名就签，没配就保持未签名（本地随便跑 assembleRelease 不会报错）
+            if (System.getenv('KEYSTORE_FILE')) signingConfig signingConfigs.release
         }
     }
 

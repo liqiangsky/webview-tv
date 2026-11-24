@@ -1,0 +1,123 @@
+name: Release APK
+
+# 开源项目常见做法：推 tag 触发，从仓库 Secret 取 keystore 签正式包，
+# 产物挂到 GitHub Release 上。也支持手动跑一次，产物只留在 Actions。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # tag 同时决定 versionName 和 versionCode：v1.2.3 -> 1.2.3 / 10203，
+      # 保证后一个 tag 的 versionCode 一定更大，同签名可以直接覆盖安装
+      - name: 从 tag 算版本号
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::tag 得写成 v1.2.3 这种形式，当前是「$TAG」"
+            exit 1
+          fi
+          MAJOR=$((10#${BASH_REMATCH[1]}))
+          MINOR=$((10#${BASH_REMATCH[2]}))
+          PATCH=$((10#${BASH_REMATCH[3]}))
+          NAME="$MAJOR.$MINOR.$PATCH"
+          CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      # 仓库 Settings → Secrets and variables → Actions 只需要两个：
+      #   KEYSTORE_BASE64    release.jks 经 base64 编码后的整段文本
+      #   KEYSTORE_PASSWORD  仓库口令（PKCS12 格式下密钥口令与它相同）
+      # 别名从 keystore 里读，不用单独配；没配 KEYSTORE_BASE64 就退回 debug 签名包
+      - name: 解出签名文件
+        id: sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            ALIAS=$("$JAVA_HOME/bin/keytool" -list -keystore "$RUNNER_TEMP/release.jks" \
+              -storepass "$KEYSTORE_PASSWORD" | \
+              awk -F, '/PrivateKeyEntry/{gsub(/^[ \t]+/, "", $1); print $1; exit}')
+            if [ -z "$ALIAS" ]; then
+              echo "::error::keystore 里读不到私钥条目，确认 KEYSTORE_PASSWORD 没填错"
+              exit 1
+            fi
+            echo "file=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
+            echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "keystore 就绪，别名 $ALIAS"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::没配 KEYSTORE_BASE64，本次出的是 debug 签名包"
+          fi
+
+      - name: 构建 release 包（正式签名）
+        if: steps.sign.outputs.signed == 'true'
+        env:
+          KEYSTORE_FILE: ${{ steps.sign.outputs.file }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ steps.sign.outputs.alias }}
+          APP_VERSION_NAME: ${{ steps.ver.outputs.name }}
+          APP_VERSION_CODE: ${{ steps.ver.outputs.code }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --console=plain \
+            -PversionName="$APP_VERSION_NAME" -PversionCode="$APP_VERSION_CODE"
+
+      - name: 构建 debug 包（兜底）
+        if: steps.sign.outputs.signed != 'true'
+        env:
+          APP_VERSION_NAME: ${{ steps.ver.outputs.name }}
+          APP_VERSION_CODE: ${{ steps.ver.outputs.code }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --console=plain \
+            -PversionName="$APP_VERSION_NAME" -PversionCode="$APP_VERSION_CODE"
+
+      # 统一改名再收拢到一个目录，后面上传/发版都只看 dist/
+      - name: 整理产物
+        env:
+          APP_VERSION_NAME: ${{ steps.ver.outputs.name }}
+        run: |
+          mkdir -p dist
+          APK=$(find app/build/outputs/apk -name '*.apk' -not -name '*-unsigned*' | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::没找到构建出来的 APK"
+            find app/build/outputs/apk -name '*.apk'
+            exit 1
+          fi
+          cp "$APK" "dist/TvLiveWeb-$APP_VERSION_NAME.apk"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TvLiveWeb-${{ steps.ver.outputs.name }}
+          path: dist/*.apk
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_VERSION_NAME: ${{ steps.ver.outputs.name }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.apk \
+            --title "v$APP_VERSION_NAME" --generate-notes
