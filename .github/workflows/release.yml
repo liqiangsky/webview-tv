@@ -105,12 +105,12 @@ jobs:
             find app/build/outputs/apk -name '*.apk'
             exit 1
           fi
-          cp "$APK" "dist/TvLiveWeb-$APP_VERSION_NAME.apk"
+          cp "$APK" "dist/InWeb-$APP_VERSION_NAME.apk"
           ls -l dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TvLiveWeb-${{ steps.ver.outputs.name }}
+          name: InWeb-${{ steps.ver.outputs.name }}
           path: dist/*.apk
 
       - name: 发布 Release
