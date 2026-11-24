@@ -1,4 +1,4 @@
-# 电视直播（Android TV · WebView）
+# InWeb（Android TV · WebView）
 
 用系统 WebView 播放直播网站的 Android TV 应用，不需要额外内核。打开就是上一个在看的频道，
 按 OK 呼出频道面板换台，频道和登录网址都在手机上配置。
@@ -41,13 +41,13 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 频道数据
 
-存在电视的 `/sdcard/Android/data/com.tvlive.web/files/`，卸载应用会清掉。也可以在电脑上直接推文件：
+存在电视的 `/sdcard/Android/data/com.inweb.tv/files/`（`applicationId` 改名前的旧版本在 `com.tvlive.web` 下，换 ID 装上新版后两者互不相干，需要时把文件搬过去），卸载应用会清掉。也可以在电脑上直接推文件：
 
 - `channels.txt`：DIYP txt 格式，`分组名,#genre#` 开头，每行 `频道名称,频道地址[,节目别名[,清晰度]]`
 - `logins.txt`：每行 `名称,地址`，只在手机配置页里用
 
 ```bash
-adb push channels.txt /sdcard/Android/data/com.tvlive.web/files/channels.txt
+adb push channels.txt /sdcard/Android/data/com.inweb.tv/files/channels.txt
 ```
 
 应用本身不带任何频道，两个文件都不存在时列表为空，面板会提示去配置页添加。

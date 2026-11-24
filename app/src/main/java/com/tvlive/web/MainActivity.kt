@@ -116,6 +116,9 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     // 当前页面地址：后台下载脚本时充当 Referer，尽量复现页面自己的那次请求
     @Volatile private var docUrl: String? = null
+    // 当前频道的域名。docUrl 要等 onPageStarted 才有，而页面一开始加载就有脚本在请求，
+    // 那一批要是按脚本自己的域名成组，缓存页就会多出一堆 CDN 分组（见 cacheEntry）
+    @Volatile private var livePageHost: String? = null
 
     // 频道数据（按分组）与浏览状态（与播放状态解耦）
     private var groups: List<Group> = emptyList()
@@ -1255,6 +1258,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         if (webOpen) recreateWebView()
         webOpen = true
         liveEntered = false
+        // 先把这个台的域名记下：紧跟的 loadUrl 里那批脚本按它归档
+        livePageHost = hostOf(url)
         // 新台重新静音：页面先自己期起播的那个频道不能出声，等黑幕要掀开时才开
         soundOn = false
         webView.removeCallbacks(soundWatch)
@@ -1538,6 +1543,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 webView.removeCallbacks(fsWatch)
                 val isLivePage = url != null && url.startsWith("http")
                 docUrl = if (isLivePage) url else null
+                if (isLivePage) hostOf(url)?.let { livePageHost = it }
                 pageInputBlocked = isLivePage
                 // 站点脚本：换页面重新匹配；这个站没脚本就把脚本通道全关掉
                 scriptCode = if (isLivePage) SiteScripts.forUrl(url)?.code else null
@@ -2152,7 +2158,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     // ---------- 静态脚本磁盘缓存（同站多频道复用，二次进台免下载 JS） ----------
 
     // 目录名带版本：v1 只存过没解压的原始字节（见 plainBody），v2 按脚本自己的域名分组，
-    // 那些条目一律作废（还能被当成有效缓存回给内核），整目录删掉
+        // v3 遇到 docUrl 还没就绪的早期请求会退回按 CDN 域名建组；这些条目一律作废
+        // （还能被当成有效缓存回给内核），整目录删掉
     private fun cacheRoot(): File = File(cacheDir, CACHE_DIR).apply {
         mkdirs()
         synchronized(legacyCacheLock) {
@@ -2204,13 +2211,15 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private fun cacheEntry(urlStr: String): Pair<File, String>? {
         val key = MessageDigest.getInstance("MD5")
             .digest(urlStr.toByteArray()).joinToString("") { "%02x".format(it) }
-        val host = pageHost() ?: URL(urlStr).host?.lowercase() ?: return null
+        val host = pageHost() ?: livePageHost ?: hostOf(urlStr) ?: return null
         return Pair(File(cacheRoot(), host), key)
     }
 
     /** 当前播放页（就是当前频道）的域名；不在播放页时为 null */
-    private fun pageHost(): String? =
-        docUrl?.let { runCatching { URL(it).host?.lowercase() }.getOrNull() }
+    private fun pageHost(): String? = hostOf(docUrl)
+
+    private fun hostOf(u: String?): String? =
+        u?.let { runCatching { URL(it).host?.lowercase() }.getOrNull() }?.takeIf { it.isNotBlank() }
 
     /** 命中直接返回；未命中当场下载（就是页面本该收到的那份）并落盘 */
     private fun cacheLookupOrFetch(urlStr: String, origin: String?): WebResourceResponse? {
@@ -2392,8 +2401,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
         // 静态脚本磁盘缓存（按频道域名分组）：单文件上限 6MB、总预算 80MB
         // 目录名带版本：换分组方式就换版本名，旧目录顺带删掉（见 LEGACY_CACHE_DIRS）
-        const val CACHE_DIR = "webstatic_v3"
-        val LEGACY_CACHE_DIRS = arrayOf("webstatic", "webstatic_v2")
+        const val CACHE_DIR = "webstatic_v4"
+        val LEGACY_CACHE_DIRS = arrayOf("webstatic", "webstatic_v2", "webstatic_v3")
         const val CACHE_MAX_OBJECT = 6L * 1024 * 1024
         const val CACHE_BUDGET = 80L * 1024 * 1024
         // 无 Cache-Control 但文件名带内容哈希/版本号的 JS：按不可变资源缓存 7 天

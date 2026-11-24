@@ -100,6 +100,20 @@ object EpgManager {
         return true
     }
 
+    /**
+     * 快捷切换：把这个源挪到第一位 —— 拉取时按列表顺序试，第一个有当期节目的就是当前源。
+     * 不删其它源，只是换先后；返回 false 表示列表里没这个地址
+     */
+    fun useSource(url: String): Boolean {
+        val list = customSources()
+        if (!list.contains(url)) return false
+        if (list.firstOrNull() == url) return true
+        prefs.edit().putString(
+            KEY_SOURCES, (listOf(url) + list.filter { it != url }).joinToString("\n")
+        ).apply()
+        return true
+    }
+
     fun removeSource(url: String): Boolean {
         val list = customSources()
         if (!list.contains(url)) return false

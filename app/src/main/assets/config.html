@@ -368,7 +368,7 @@
   </div>
   <div class="subbar"><div class="find">
     <svg class="mag" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-    <input id="find" placeholder="搜索频道、分组或地址" autocomplete="off">
+    <input id="find" autocomplete="off">
     <span class="n" id="findN"></span>
     <button class="x" id="findX" hidden>✕</button>
   </div></div>
@@ -390,9 +390,6 @@
   </div>
   <div class="pmain">
     <div class="group" id="loginList"></div>
-    <div class="hint">点条目右侧「打开」，电视会全屏打开这个网址并等手机遥控——点按钮、输账号密码
-      用「电视遥控」页的触控板。登录完按电视左下角「关闭」（或返回键）退出，电视会自动重播刚才那个台。<br>
-      点条目本身可以改名称或地址。</div>
   </div>
 </div>
 
@@ -420,7 +417,7 @@
       <button class="chip key sq" data-zk="0">1×</button>
       <button class="chip key sq" data-zk="1">＋</button></div>
     <div class="sec"><b>输入框</b></div>
-    <div class="inrow"><input id="rcText" placeholder="写内容，留空即清空">
+    <div class="inrow"><input id="rcText">
       <button class="go" id="rcSend">替换</button></div>
   </div>
 </div>
@@ -434,8 +431,6 @@
   </div>
   <div class="pmain">
     <div class="group" id="groupList"></div>
-    <div class="hint">改名会带着组里的频道一起改；删组会连组里的频道一起删。
-      分组不能是空的，新建时保存名称后会接着让你填第一个频道。</div>
   </div>
 </div>
 
@@ -484,7 +479,7 @@
         <div class="note">XMLTV 地址（.xml 或 .xml.gz）。节目单只认你配的源，
           不配置就是空的。</div></div></div>
       <div class="frow addin">
-        <input id="epgUrl" inputmode="url" placeholder="https://example.com/epg.xml.gz"
+        <input id="epgUrl" inputmode="url"
           autocomplete="off" autocapitalize="off" spellcheck="false">
         <button class="go" id="epgAdd">添加</button></div>
       <div id="epgSrcList"></div>
@@ -508,7 +503,7 @@
     </div>
   </div>
   <div class="footbar">
-    <button class="act-full warn" id="cacheClearAll">全部清除</button>
+    <button class="act-full danger" id="cacheClearAll">全部清除</button>
   </div>
 </div>
 
@@ -519,9 +514,7 @@
     <span class="side r"></span>
   </div>
   <div class="pmain">
-    <textarea id="impText" placeholder="我的频道,#genre#
-频道A,https://example.com/a.m3u8
-频道B,https://example.com/b.m3u8"></textarea>
+    <textarea id="impText"></textarea>
     <div class="chips">
       <button class="chip on" id="modeAppend">追加（同名同地址跳过）</button>
       <button class="chip" id="modeReplace">覆盖（清空现有再导入）</button>
@@ -548,7 +541,7 @@
   <div class="pmain">
     <div class="group" id="scriptList"></div>
     <div class="hint">
-      一条脚本 = 一个名字 + 一段 JS。在「编辑频道」里选中它，那个频道才会跑；
+      一条脚本 = 一个名字 + 一段 JS。在编辑条目时选中它，那个网址才会跑；
       执行时机和接口见右上角「？」。
     </div>
   </div>
@@ -563,7 +556,7 @@
   <div class="pmain">
     <div class="sec"><b>什么时候跑</b></div>
     <div class="hint" style="margin-top:0">
-      只跑在你绑给它的频道上；没绑的页面里没有 <code>TV</code>。
+      只跑在你绑定到它的网址上；没绑的页面里没有 <code>TV</code>。
       同一段脚本会反复跑：DOM 就绪、播放器铺满、地址变了、<code>TV.wait</code> 还在等东西时。
       所以只登记状态，有副作用的动作放进 <code>TV.wait</code> 回调；脚本报错只记一行日志，不影响播放。
     </div>
@@ -578,8 +571,8 @@
     <div class="sec"><b>接口</b><span class="sp"></span><span class="cnt">5 个</span></div>
     <div class="group doc">
       <div class="drow"><div class="dnm">TV.pick(selector, index)</div>
-        <div class="ddesc">页内换台一条龙：等第 <code>index</code> 个入口出现 → 压黑幕 → 点它 → 报切完。
-          没序号或越界就收工，按页面默认频道播。</div></div>
+        <div class="ddesc">页内点选一条龙：等第 <code>index</code> 个入口出现 → 压黑幕 → 点它 → 报完成。
+          没序号或越界就收工，按页面默认内容走。</div></div>
       <div class="drow"><div class="dnm">TV.wait(selector, fn, key)</div>
         <div class="ddesc">等东西出现，出现后只调一次 <code>fn(元素数组)</code>；
           参数可以是选择器，也可以是返回元素/真假值的函数。
@@ -587,28 +580,28 @@
       <div class="drow"><div class="dnm">TV.param(name)</div>
         <div class="ddesc">读地址参数（<code>?i=3</code>、<code>#/live?id=3</code> 都认），没有回 <code>null</code>。</div></div>
       <div class="drow"><div class="dnm">TV.log(m)</div>
-        <div class="ddesc">写一行运行日志，频道行点「日志」能看到（<code>console</code> 不进日志）。</div></div>
+        <div class="ddesc">写一行运行日志，列表里的「日志」能看到（<code>console</code> 不进日志）。</div></div>
       <div class="drow"><div class="dnm">TV.toast(m)</div>
         <div class="ddesc">电视屏幕底部提示一句，两秒后消失。</div></div>
     </div>
 
     <div class="sec"><b>用法：该用 pick 还是 wait</b></div>
     <div class="hint" style="margin-top:0">
-      • <code>TV.pick</code>：点列表第 N 项就切台，一行写完；<br>
+      • <code>TV.pick</code>：点列表第 N 项就完成，一行写完；<br>
       • <code>TV.wait</code>：还有别的步骤（先展开列表再点），或要等的是状态（播放器就绪）就用它；<br>
       • 页面默认就播对了：两个都不用。<br>
       两者自带重试和去重，不用写循环、也不用写收尾。
     </div>
 
-    <div class="sec"><b>例子：一个页面里换频道</b></div>
-    <pre class="codeblk">// 频道地址只差 ?i=N（从 0 开始），整段脚本就两行：
+    <div class="sec"><b>例子：一个页面里点选第 N 项</b></div>
+    <pre class="codeblk">// 地址只差 ?i=N（从 0 开始），整段脚本就两行：
 TV.pick('#programMain .item', TV.param('i'));</pre>
     <div class="hint">
       参数名换成 <code>TV.param('ch')</code>、选择器换成那个站的入口就能用。
     </div>
 
-    <div class="sec"><b>例子：步骤多一点的切台</b></div>
-    <pre class="codeblk">// 比如要先点开「频道列表」才能看到入口：等列表按钮 → 点开 → 再等入口 → 点它
+    <div class="sec"><b>例子：步骤多一点的点选</b></div>
+    <pre class="codeblk">// 比如要先点开一个列表才能看到入口：等列表按钮 → 点开 → 再等入口 → 点它
 var i = TV.param('i');
 if (i == null) return;              // 没带序号就不动页面
 TV.wait('#openList', function (els) {
@@ -619,8 +612,8 @@ TV.wait('#openList', function (els) {
 }, 'open');</pre>
 
     <div class="sec"><b>例子：手写完整流程</b></div>
-    <pre class="codeblk">// 一个网页里有很多频道：每个频道一条地址、只差 URL 参数，都绑这一段脚本；
-// 脚本读参数，自己去点该选的那一路
+    <pre class="codeblk">// 一个网页里有很多可选项：每个选项一条地址、只差 URL 参数，都绑这一段脚本；
+// 脚本读参数，自己去点该选的那一条
 var ch = TV.param('ch');          // 换成你的参数名
 if (ch != null) {
   // 等入口渲染出来再点；只点一次由 wait 保证
@@ -628,13 +621,13 @@ if (ch != null) {
     items[+ch].click();           // 后来交回应用：全屏、等新流真出首帧才揭幕
   });
 } else {
-  TV.log('地址里没有参数，按页面默认的频道播');
+  TV.log('地址里没有参数，按页面默认内容走');
 }</pre>
 
     <div class="sec"><b>注意</b></div>
     <div class="hint">
-      别用 <code>title</code> 判断换台成功，很多站换台后它不变。<br>
-      换一路是重新加载页面，脚本要尽快点完，别让脚本时间拖满 20 秒。<br>
+      别用 <code>title</code> 判断点选成功，很多站换了内容它也不变。<br>
+      换一个地址就是重新加载页面，脚本要尽快点完，别让脚本时间拖满 20 秒。<br>
       起播时页面是静音的，别拿声音判断播没播起来。
     </div>
   </div>
@@ -648,10 +641,10 @@ if (ch != null) {
       <button class="lnk b" id="scSave">保存</button>
     </div>
     <div class="group">
-      <div class="frow"><label>名称</label><input id="scName" placeholder="江苏卫视" autocomplete="off"></div>
+      <div class="frow"><label>名称</label><input id="scName" autocomplete="off"></div>
     </div>
     <textarea id="scCode" class="code" spellcheck="false" autocapitalize="off" autocorrect="off"
-      placeholder="// 频道地址只差 ?i=N：等入口出现、点它、切完报一声，全交给 TV.pick&#10;TV.pick('换成入口的选择器', TV.param('i'));"></textarea>
+      placeholder="// 地址只差 ?i=N：等入口出现、点它、完成报一声，全交给 TV.pick&#10;TV.pick('换成入口的选择器', TV.param('i'));"></textarea>
     <div class="chips" style="margin:10px 14px 0">
       <button class="chip" id="scTpl">插入模板</button>
     </div>
@@ -677,7 +670,7 @@ if (ch != null) {
     <div class="nav"><span></span><h2>配对电视</h2>
       <button class="lnk b" id="pinCancel">稍后</button></div>
     <div class="group"><div class="frow"><label>配对码</label>
-      <input id="pinInput" inputmode="numeric" maxlength="4" placeholder="4 位数字"></div></div>
+      <input id="pinInput" inputmode="numeric" maxlength="4"></div></div>
     <div class="hint">配对码显示在电视的「设置 → 配对二维码」页面里。</div>
     <button class="act-full pri" id="pinOk">确定</button>
   </div>
@@ -691,12 +684,12 @@ if (ch != null) {
       <button class="lnk b" id="eSave">保存</button>
     </div>
     <div class="group">
-      <div class="frow"><label>名称</label><input id="eName" placeholder="频道A"></div>
+      <div class="frow"><label>名称</label><input id="eName"></div>
       <div class="frow"><label>分组</label><select id="eGroup"></select><span class="caret"></span></div>
-      <div class="frow"><label>清晰度</label><input id="eQuality" placeholder="HD" autocomplete="off"></div>
+      <div class="frow"><label>清晰度</label><input id="eQuality" autocomplete="off"></div>
       <div class="frow"><label>来源</label><input id="eSource" autocomplete="off"></div>
       <div class="frow col"><label>播放地址</label>
-        <input id="eUrl" inputmode="url" placeholder="https://..."></div>
+        <input id="eUrl" inputmode="url"></div>
       <div class="frow"><label>脚本</label><select id="eScript"></select><span class="caret"></span></div>
     </div>
     <div class="hint" id="eScriptHint" hidden>这个频道换个地址后要重新确认一下脚本。</div>
@@ -712,9 +705,9 @@ if (ch != null) {
       <button class="lnk b" id="lSave">保存</button>
     </div>
     <div class="group">
-      <div class="frow"><label>名称</label><input id="lnName" placeholder="网站账号" autocomplete="off"></div>
+      <div class="frow"><label>名称</label><input id="lnName" autocomplete="off"></div>
       <div class="frow col"><label>地址</label>
-        <input id="lnUrl" inputmode="url" placeholder="https://example.com/login"></div>
+        <input id="lnUrl" inputmode="url"></div>
     </div>
     <div class="hint">漏了协议会按 https 补上；看着不像能打开的网址会被拦下。</div>
   </div>
@@ -728,7 +721,7 @@ if (ch != null) {
       <button class="lnk b" id="gSave">保存</button>
     </div>
     <div class="group"><div class="frow"><label>名称</label>
-      <input id="gName" placeholder="我的频道" autocomplete="off"></div></div>
+      <input id="gName" autocomplete="off"></div></div>
     <div class="warnline" id="gWarn" hidden></div>
     <button class="act-full danger" id="gDel" hidden>删除该分组</button>
   </div>
@@ -892,8 +885,8 @@ if (ch != null) {
       var isFold = g.channels.length && !q && fold.indexOf(g.name) >= 0;
       var rows = g.channels.map(function (ch) {
         var on = ch.url === playing;
-        var tag = ch.quality && ch.quality !== 'HD'
-          ? '<span class="tag">' + esc(ch.quality) + '</span>' : '';
+        // 有值就显示，HD 也不例外；留空则不出角标
+        var tag = ch.quality ? '<span class="tag">' + esc(ch.quality) + '</span>' : '';
         // 来源是自由备注：填了才显示，免得空标签占位
         if (ch.source) tag += '<span class="tag">' + esc(ch.source) + '</span>';
         return '<div class="row' + (on ? ' playing' : '') + '" data-edit="' + esc(ch.line) + '">' +
@@ -1048,7 +1041,7 @@ if (ch != null) {
         openWs();
       }).catch(function () {});
     } else if (d.ldel != null) {
-      arm(t, '确认', function () { act('login.del', { url: d.ldel }, '已删除'); });
+      arm(t, '确认删', function () { act('login.del', { url: d.ldel }, '已删除'); });
     } else if (d.ledit != null) {
       openLogin(d.ledit);
     } else if (d.gedit != null) {
@@ -1086,8 +1079,12 @@ if (ch != null) {
       $('cntEpg').textContent = e.channels ? e.channels + ' 台' : '';
       var custom = e.custom || [];
       $('epgSrcList').innerHTML = custom.length ? custom.map(function (s) {
+        // 在用 = 这一轮真正供给了节目的源，跟频道行的「播放中」一样标出来
+        var on = e.source === s;
         return '<div class="row noact"><div class="txt"><div class="u" style="margin:0">' +
-          esc(s) + '</div></div><button class="lnk danger" data-epgdel="' + esc(s) + '">删除</button></div>';
+          esc(s) + (on ? '<span class="tag live">在用</span>' : '') + '</div></div>' +
+          (on ? '' : '<button class="lnk" data-epguse="' + esc(s) + '">用</button>') +
+          '<button class="lnk danger" data-epgdel="' + esc(s) + '">删</button></div>';
       }).join('') : '<div class="row noact"><div class="txt"><div class="note">'
         + '还没配置源，节目单是空的。</div></div></div>';
     }).catch(function () {});
@@ -1099,7 +1096,7 @@ if (ch != null) {
   });
 
   document.body.addEventListener('click', function (ev) {
-    var t = ev.target.closest('#epgReload,#epgGo,#epgAdd,[data-epgdel]');
+    var t = ev.target.closest('#epgReload,#epgGo,#epgAdd,[data-epguse],[data-epgdel]');
     if (!t) return;
     if (t.id === 'epgReload') { loadEpg(); return; }
     if (t.id === 'epgGo') {
@@ -1118,10 +1115,21 @@ if (ch != null) {
       }).catch(function () {});
       return;
     }
-    api('epg.src.del', { url: t.dataset.epgdel }).then(function (r) {
-      if (r.json && r.json.ok) { toast('已删除'); loadEpg(); }
-      else toast((r.json && r.json.err) || '删除失败', true);
-    }).catch(function () {});
+    // 快捷切换：跟频道行的「播」一样，点一下就把这个源挪到第一位并立即拉一次
+    if (t.dataset.epguse != null) {
+      api('epg.src.use', { url: t.dataset.epguse }).then(function (r) {
+        if (r.json && r.json.ok) { toast('已切换，正在更新'); loadEpg(); }
+        else toast((r.json && r.json.err) || '切换失败', true);
+      }).catch(function () {});
+      return;
+    }
+    // 删源也要二次确认：跟别处的「删」一样，点一下变「确认删」，再点才真删
+    arm(t, '确认删', function () {
+      api('epg.src.del', { url: t.dataset.epgdel }).then(function (r) {
+        if (r.json && r.json.ok) { toast('已删除'); loadEpg(); }
+        else toast((r.json && r.json.err) || '删除失败', true);
+      }).catch(function () {});
+    });
   });
 
   // ---------------- 脚本缓存 ----------------
@@ -1157,7 +1165,7 @@ if (ch != null) {
         return '<div class="row noact"><div class="txt"><div class="nm">' + esc(d.host) + '</div>' +
           '<div class="u">' + d.count + ' 个文件 · ' + fmtSize(d.size) +
             ' · 最近 ' + fmtAgo(d.last) + '</div></div>' +
-          '<button class="lnk danger" data-cache="' + esc(d.host) + '">清除</button></div>';
+          '<button class="lnk danger" data-cache="' + esc(d.host) + '">删</button></div>';
       }).join('') : '<div class="row noact"><div class="txt">'
         + '<div class="note">还没有脚本缓存。</div></div></div>';
     }).catch(function () {});
@@ -1169,12 +1177,15 @@ if (ch != null) {
     if (b.id === 'cacheReload') { loadCache(); return; }
     var host = b.dataset.cache;
     var body = host != null ? { host: host } : {};
-    api('cache.clear', body).then(function (r) {
-      if (r.json && r.json.ok) {
-        toast(host != null ? '已清除 ' + host : '已清空脚本缓存');
-        loadCache();
-      } else toast((r.json && r.json.err) || '清除失败', true);
-    }).catch(function () {});
+    // 同样走就地二次确认，清完之后这里重画列表，确认态自然消失
+    arm(b, '确认删', function () {
+      api('cache.clear', body).then(function (r) {
+        if (r.json && r.json.ok) {
+          toast(host != null ? '已清除 ' + host : '已清空脚本缓存');
+          loadCache();
+        } else toast((r.json && r.json.err) || '清除失败', true);
+      }).catch(function () {});
+    });
   });
 
   // ---------------- 运行日志 ----------------
@@ -1245,7 +1256,7 @@ if (ch != null) {
     var host = $('scriptList');
     if (!host) return;
     if (!list.length) {
-      host.innerHTML = '<div class="empty" style="padding:26px">还没有脚本<br>点右上角「新建」写一条，再在频道里选它</div>';
+      host.innerHTML = '<div class="empty" style="padding:26px">还没有脚本<br>点右上角「新建」写一条，再在条目里选它</div>';
       return;
     }
     // 每条脚本标一下有几个频道点名用它，免得删了才干知道有人用
@@ -1253,7 +1264,7 @@ if (ch != null) {
     var binds = (state && state.binds) || {};
     Object.keys(binds).forEach(function (u) { use[binds[u]] = (use[binds[u]] || 0) + 1; });
     host.innerHTML = list.map(function (s) {
-      var tag = use[s.id] ? '<span class="tag">' + use[s.id] + ' 个频道</span>' : '';
+      var tag = use[s.id] ? '<span class="tag">' + use[s.id] + ' 处使用</span>' : '';
       return '<div class="row" data-scr="' + esc(s.id) + '">' +
         '<div class="txt"><div class="nm">' + esc(s.name) + tag + '</div>' +
           '<div class="u">' + s.code.split('\n').length + ' 行 JS</div></div>' +
@@ -1284,7 +1295,7 @@ if (ch != null) {
     var name = $('scName').value.trim();
     var code = $('scCode').value;
     if (!code.trim()) { toast('脚本内容不能为空', true); return; }
-    if (!name) { toast('给脚本起个名字，频道里才好选', true); return; }
+    if (!name) { toast('给脚本起个名字，绑定时才好选', true); return; }
     var op = editingScript ? 'script.upd' : 'script.add';
     var body = editingScript
       ? { id: editingScript.id, name: name, code: code }
@@ -1300,14 +1311,14 @@ if (ch != null) {
     arm(this, '确认删除', function () {
       api('script.del', { id: s.id }).then(handle).then(function () {
         hide($('scrMask'));
-        toast('已删除，原来用它的频道会回到「不使用脚本」');
+        toast('已删除，原来用它的网址会回到「不使用脚本」');
       }).catch(function () {});
     });
   };
   $('scTpl').onclick = function () {
     var t = $('scCode');
     t.value = (t.value.trim() ? t.value.replace(/\s*$/, '') + '\n\n' : '') +
-      '// 一个网页多个频道：每条频道一个地址、只差 URL 参数，都绑这一段脚本\n' +
+      '// 一个网页多个可选项：每个选项一个地址、只差 URL 参数，都绑这一段脚本\n' +
       '// 等入口出现 → 压黑幕 → 点它 → 报「切完」都由 TV.pick 包了；// 参数名换成你自己的\n' +
       'TV.pick(\'换成本站第 N 项的选择器\', TV.param(\'i\'));\n';
     toast('模板已插入，改掉选择器再保存');
@@ -1338,7 +1349,8 @@ if (ch != null) {
     $('eDel').hidden = !hit;
     disarm($('eDel'));
     // 清晰度是自由文本：老数据里的写法（「1080P」之类）原样填进去，不改成选项
-    $('eQuality').value = hit ? hit.ch.quality : 'HD';
+    // 添加时不预填清晰度：留空就不写这一列，面板上也不显示
+    $('eQuality').value = hit ? hit.ch.quality : '';
     $('eSource').value = hit ? (hit.ch.source || '') : '';
     renderPicks();
     renderScriptPick(hit ? hit.ch.url : '');
@@ -1393,7 +1405,7 @@ if (ch != null) {
     var old = editingGroup;
     if (!old) return;
     var self = this;
-    arm(this, '再点一次确认', function () {
+    arm(this, '确认删除', function () {
       api('group.del', { name: old }).then(function (r) {
         handle(r);
         hide($('groupMask'));

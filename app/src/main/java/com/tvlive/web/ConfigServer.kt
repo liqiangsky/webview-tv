@@ -547,6 +547,12 @@ class ConfigServer(
             }
             "epg.src.add" -> return if (EpgManager.addSource(arg.str("url"))) epgState()
                 else fail("地址要以 http 开头，或已经加过了")
+            "epg.src.use" -> {
+                if (!EpgManager.useSource(arg.str("url"))) return fail("没找到这个源")
+                // 切完立刻拉一次：状态里的「当前源」不刷新就看不出来切没切成功
+                EpgManager.refreshNow(context) { }
+                return epgState()
+            }
             "epg.src.del" -> {
                 if (!EpgManager.removeSource(arg.str("url"))) return fail("没找到这个源")
                 return epgState()

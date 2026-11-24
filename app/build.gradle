@@ -4,11 +4,14 @@ plugins {
 }
 
 android {
+    // namespace 只是源码包名（Kotlin 的 package 跟它走），applicationId 才是应用身份：
+    // 它决定桌面图标认的是哪个应用、数据落在 /sdcard/Android/data/<applicationId>/、
+    // 以及覆盖安装时能不能接上前一个版本。两者可以不同，改 ID 不等于要搬源文件。
     namespace 'com.tvlive.web'
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.tvlive.web"
+        applicationId "com.inweb.tv"
         minSdk 26
         targetSdk 35
         versionCode 1
