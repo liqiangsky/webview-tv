@@ -2893,10 +2893,27 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   window.scrollTo(0, 0);
                 } catch (e) {}
               }
+              // 把容器重新摆到 <html> 的最后一个子节点。
+              // z-index 已经顶到 int 上限，再往上没有数字可用；同 z-index 的两个定位层
+              // 由 DOM 顺序决定谁在上面，而站点的广告/遮罩是后来才插到 <html> 末尾的，
+              // 于是它压在容器上。每轮把容器再提一次就压回去。
+              // 只在真需要挪的时候动：每次 appendChild 都是一次重排，不能每轮都做。
+              function raiseWrap(wrap) {
+                try {
+                  var de = document.documentElement;
+                  if (de && wrap.parentNode === de && de.lastElementChild !== wrap) {
+                    de.appendChild(wrap);
+                    // 只在真动手时打：频率本来就低，留着能看出站点往上层插了什么
+                    console.log('[tvfs] re-raise, siblings=' + de.children.length +
+                      ' last=' + (de.lastElementChild ? de.lastElementChild.tagName : '-'));
+                  }
+                } catch (e) {}
+              }
               function fitWrap(wrap) {
                 // 先对位再定尺寸：偏移可能在上两轮之间变过
                 placeWrap(wrap);
                 lockPageScroll();
+                raiseWrap(wrap);
                 var size = viewportSize();
                 if (!size) return;
                 var w = size.w, h = size.h;
