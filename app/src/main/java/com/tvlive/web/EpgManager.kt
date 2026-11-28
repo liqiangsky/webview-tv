@@ -302,7 +302,11 @@ object EpgManager {
                             "display-name" -> {
                                 val text = parser.nextText()
                                 val key = channelKey
-                                if (key != null) index.putIfAbsent(norm(text), key)
+                                // putIfAbsent 是 API 24 才有的，这里手写等价逻辑（minSdk 21）
+                                if (key != null) {
+                                    val name = norm(text)
+                                    if (index[name] == null) index[name] = key
+                                }
                             }
                             "programme" -> {
                                 progKey = parser.getAttributeValue(null, "channel")?.let(::norm)

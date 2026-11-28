@@ -17,7 +17,9 @@ android {
 
     defaultConfig {
         applicationId "com.inweb.tv"
-        minSdk 26
+        // 21 = Android 5.0：WebView 从这版起可以单独升级（能到 Chromium 95），
+        // 再往下 4.4 的 WebView 冻在 Chromium 30 且永不可升级，MSE/现代 JS 都缺
+        minSdk 21
         targetSdk 35
         versionCode buildVersionCode
         versionName buildVersionName
