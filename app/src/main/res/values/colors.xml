@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- TV 横幅底色：与启动页、图标底色同一套蓝 -->
-    <color name="banner_start">#080D18</color>
-    <color name="banner_center">#102A5C</color>
-    <color name="banner_end">#1B4A9C</color>
+    <!-- TV 横幅底色：与启动页、图标底色同一套蓝，电视桌面背景很暗，比图标底色略提亮一点才不至于发闷 -->
+    <color name="banner_start">#0A1020</color>
+    <color name="banner_center">#14356E</color>
+    <color name="banner_end">#2158B4</color>
 </resources>

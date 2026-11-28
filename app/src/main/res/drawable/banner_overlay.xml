@@ -1,24 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 横幅覆盖层：网页网格纹理 + 六格播放标 + INWEB 字标。
-     全部纯色，不能带 gradient —— 带渐变的矢量会被 aapt 移到 v24，API 21-23 的电视就拿不到。 -->
+<!-- 横幅覆盖层：网格纹理 + 六格播放标 + INWEB 字标。
+     全部纯色，不能带 gradient —— 带渐变的矢量会被 aapt 移到 v24，API 21-23 的电视就拿不到。
+     排版按 320x180 定死：标志占左三分之一，字标从 165 起，两边各留 30 以上。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="320dp"
     android:height="180dp"
     android:viewportWidth="320"
     android:viewportHeight="180">
 
-    <!-- 网格：极淡，大屏上才隐约看得出，用来托住左边的标志 -->
+    <!-- 网格：只留竖线，极淡。横线会从标志中间穿过，看着像划了一道 -->
     <path
-        android:pathData="M40,0 V180 M120,0 V180 M200,0 V180 M280,0 V180 M0,45 H320 M0,135 H320"
+        android:pathData="M40,0 V180 M120,0 V180 M200,0 V180 M280,0 V180"
         android:strokeWidth="1"
-        android:strokeColor="#1A9CC8FF" />
+        android:strokeColor="#149CC8FF" />
 
-    <!-- 左侧标志：与图标前景同一套几何，等比缩到 96dp -->
+    <!-- 左侧标志：与图标前景同一套几何，等比放到 113dp -->
     <group
-        android:scaleX="0.8888"
-        android:scaleY="0.8888"
-        android:translateX="34"
-        android:translateY="42">
+        android:scaleX="1.05"
+        android:scaleY="1.05"
+        android:translateX="28"
+        android:translateY="33">
         <path
             android:fillColor="#F4F8FF"
             android:pathData="M34,30 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
@@ -42,10 +43,10 @@
             android:pathData="M70,48 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
     </group>
 
-    <!-- 字标 INWEB：几何无衬线，笔画 6dp、圆头，矢量保证任何尺寸都锐利 -->
+    <!-- 字标 INWEB：几何无衬线，cap 高 30、笔画 5.5、字距 9，矢量保证任何尺寸都锐利 -->
     <path
-        android:pathData="M157,72 V106 M175,106 V72 L193,106 V72 M210,72 L216.5,106 L223,84 L229.5,106 L236,72 M270,72 H254 V106 H270 M254,89 H266 M286,72 V106 M286,72 H296 a8.5,8.5 0 0 1 0,17 H286 M286,89 H297 a8.5,8.5 0 0 1 0,17 H286"
-        android:strokeWidth="6"
+        android:pathData="M168,76 V106 M183,106 V76 L198,106 V76 M207,76 L212.5,106 L218,86 L223.5,106 L229,76 M251,76 H238 V106 H251 M238,91 H249 M260,76 V106 M260,76 H268 a7.5,7.5 0 0 1 0,15 H260 M260,91 H269 a7.5,7.5 0 0 1 0,15 H260"
+        android:strokeWidth="5.5"
         android:strokeColor="#F4F8FF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
