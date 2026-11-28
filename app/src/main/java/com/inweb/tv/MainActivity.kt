@@ -444,6 +444,21 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               return rawPlay.apply(this, arguments);
             };
           } catch (e) {}
+          // 站点自己插进来的广告/预览流可能根本不走 play()：autoplay 属性、播放器内核直接
+          // 起播都绕过了上面那个原型钩子。这里再挂一组捕获阶段的事件，规则还是同一条：
+          // 除了铺满的那一路，谁开始出声就把谁静音（只静音，不暂停）。
+          try {
+            var guardMedia = function (e) {
+              var el = e.target;
+              if (!el || (el.tagName !== 'VIDEO' && el.tagName !== 'AUDIO')) return;
+              var cur = window.__tvFs && window.__tvFs.el;
+              if (cur && el === cur) return;
+              if (!el.muted) { try { el.muted = true; } catch (x) {} }
+            };
+            document.addEventListener('play', guardMedia, true);
+            document.addEventListener('playing', guardMedia, true);
+            document.addEventListener('volumechange', guardMedia, true);
+          } catch (e) {}
           return '1';
         })();
     """
@@ -2664,6 +2679,33 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               // 开声之后：有些播放器默认静音起播（autoplay 策略 / 自己的默认值），
               // 画面有了却没声，这里把声音压到 50% 并持续纠正。
               var TV_VOLUME = 0.5;
+              // 铺满的这一路只归我们管：先确保有声音，再把它的 muted 改成只读 false。
+              // 站点（典型：贴片广告 SDK）会在起播时把页面上所有 video 一起静音，包括正在
+              // 直播的这一路；只靠 volumechange 事件纠一次抢不过它——它一边放广告一边把
+              // muted 写回去，于是前几秒画面在播却没声音，广告放完才恢复。
+              // 上锁之后谁写 true 都不生效，只能解除静音。只作用于铺满的那一个元素，
+              // 换片时旧元素由 unlockAudio 解锁，回到页面正常参与静音。
+              function lockAudio(el) {
+                if (!el) return;
+                try {
+                  if (el.__tvAudioLock) return;
+                  el.__tvAudioLock = 1;
+                  el.muted = false;
+                  if (el.hasAttribute && el.hasAttribute('muted')) el.removeAttribute('muted');
+                  Object.defineProperty(el, 'muted', {
+                    configurable: true,
+                    get: function () { return false; },
+                    set: function () {}
+                  });
+                } catch (e) {}
+              }
+              function unlockAudio(el) {
+                if (!el || !el.__tvAudioLock) return;
+                try {
+                  el.__tvAudioLock = 0;
+                  delete el.muted;
+                } catch (e) {}
+              }
               function applyVolume(el) {
                 if (!el) return;
                 try {
@@ -2682,6 +2724,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     if (!el.muted) el.muted = true;
                     return;
                   }
+                  // 铺满的这一路：上锁，别人再静音也不作数
+                  lockAudio(el);
                   if (el.muted) el.muted = false;
                   if (el.defaultMuted) el.defaultMuted = false;
                   if (el.hasAttribute && el.hasAttribute('muted')) el.removeAttribute('muted');
@@ -3128,6 +3172,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                     // 旧的那一路只静音、不暂停：静音就没有两路声音，画面又被全屏容器盖着看不见。
                     // 暂停会让站点的广告系统认为“广告被打断”，转头再抢一次直播 ——
                     // 站点那种循环（切广告→暂停广告→抢直播→切回）就是这么来的
+                    // （铺满那一路的 muted 被上锁过，得先解锁才压得住）
+                    unlockAudio(cur.el);
                     try { cur.el.muted = true; } catch (e) {}
                     cur.el.style.cssText = cur.css || '';
                     if (cur.parent) {
