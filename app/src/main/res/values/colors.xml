@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="banner_start">#0B1220</color>
-    <color name="banner_end">#123B7A</color>
+    <!-- TV 横幅底色：与启动页、图标底色同一套蓝 -->
+    <color name="banner_start">#080D18</color>
+    <color name="banner_center">#102A5C</color>
+    <color name="banner_end">#1B4A9C</color>
 </resources>

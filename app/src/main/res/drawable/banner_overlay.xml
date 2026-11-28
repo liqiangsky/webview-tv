@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 横幅覆盖层：网页网格纹理 + 六格播放标 + INWEB 字标。
+     全部纯色，不能带 gradient —— 带渐变的矢量会被 aapt 移到 v24，API 21-23 的电视就拿不到。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- 网格：极淡，大屏上才隐约看得出，用来托住左边的标志 -->
+    <path
+        android:pathData="M40,0 V180 M120,0 V180 M200,0 V180 M280,0 V180 M0,45 H320 M0,135 H320"
+        android:strokeWidth="1"
+        android:strokeColor="#1A9CC8FF" />
+
+    <!-- 左侧标志：与图标前景同一套几何，等比缩到 96dp -->
+    <group
+        android:scaleX="0.8888"
+        android:scaleY="0.8888"
+        android:translateX="34"
+        android:translateY="42">
+        <path
+            android:fillColor="#F4F8FF"
+            android:pathData="M34,30 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+        <path
+            android:fillAlpha="0.92"
+            android:fillColor="#F4F8FF"
+            android:pathData="M34,48 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+        <path
+            android:fillAlpha="0.84"
+            android:fillColor="#F4F8FF"
+            android:pathData="M34,66 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+        <path
+            android:fillColor="#A8ECFF"
+            android:pathData="M52,39 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+        <path
+            android:fillAlpha="0.92"
+            android:fillColor="#A8ECFF"
+            android:pathData="M52,57 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+        <path
+            android:fillColor="#46C2FF"
+            android:pathData="M70,48 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+    </group>
+
+    <!-- 字标 INWEB：几何无衬线，笔画 6dp、圆头，矢量保证任何尺寸都锐利 -->
+    <path
+        android:pathData="M157,72 V106 M175,106 V72 L193,106 V72 M210,72 L216.5,106 L223,84 L229.5,106 L236,72 M270,72 H254 V106 H270 M254,89 H266 M286,72 V106 M286,72 H296 a8.5,8.5 0 0 1 0,17 H286 M286,89 H297 a8.5,8.5 0 0 1 0,17 H286"
+        android:strokeWidth="6"
+        android:strokeColor="#F4F8FF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -1,24 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 图标前景：一块圆角屏幕 + 正中白色播放三角。整体压在 108dp 的安全区里（中间 72dp），
-     TV 启动器裁成圆角/圆形都不会切到东西；纯矢量，任何分辨率都清晰，不用出各密度 PNG。 -->
+<!-- 图标前景：六个网页格子拼成一个播放三角。
+     inweb 是把网页装进屏幕，所以三角不是实心色块，而是一格格小卡片拼出来的：
+     远看是播放键，近看是网格。格子自左向右由白转青，视线顺着指向播放入口。
+     整体落在 108dp 安全区内（21..87），裁圆裁方都碰不到。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 屏幕：白色描边，圆角比直角更耐看，也跟"网页播放器"的卡片感一致 -->
+    <!-- 左列：三角的底边，最实 -->
     <path
-        android:pathData="M35,31.5 h38 a10,10 0 0 1 10,10 v21 a10,10 0 0 1 -10,10 h-38 a10,10 0 0 1 -10,-10 v-21 a10,10 0 0 1 10,-10 z"
-        android:strokeColor="#F2F6FF"
-        android:strokeWidth="4.5" />
-    <!-- 播放三角：视觉中心比屏幕几何中心略偏右，看着才居中 -->
+        android:fillColor="#F4F8FF"
+        android:pathData="M34,30 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M47,42 L47,62 L65.5,52 Z" />
-    <!-- 底部两支脚，交代"电视机"，同时把重心压住 -->
+        android:fillAlpha="0.92"
+        android:fillColor="#F4F8FF"
+        android:pathData="M34,48 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
     <path
-        android:pathData="M40,80 h28"
-        android:strokeColor="#F2F6FF"
-        android:strokeLineCap="round"
-        android:strokeWidth="4.5" />
+        android:fillAlpha="0.84"
+        android:fillColor="#F4F8FF"
+        android:pathData="M34,66 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+    <!-- 中列：往青色过渡 -->
+    <path
+        android:fillColor="#A8ECFF"
+        android:pathData="M52,39 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+    <path
+        android:fillAlpha="0.92"
+        android:fillColor="#A8ECFF"
+        android:pathData="M52,57 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
+    <!-- 右列：三角的尖，最亮的一格 -->
+    <path
+        android:fillColor="#46C2FF"
+        android:pathData="M70,48 h6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-6 a4,4 0 0 1 -4,-4 v-6 a4,4 0 0 1 4,-4 z" />
 </vector>
