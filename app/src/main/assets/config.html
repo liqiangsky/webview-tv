@@ -204,6 +204,7 @@
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: var(--fs-3); line-height: 1.6; letter-spacing: 0; }
   textarea:focus { outline: none; }
+  textarea::placeholder { color: var(--dim); opacity: 1; }
   .hint { color: var(--dim); font-size: var(--fs-3); line-height: 1.6; margin: 10px 6px 0; }
   /* 运行日志：等宽小字、可滚动，贴底看最新一条 */
   .logbody { margin: 0; padding: 12px 14px; max-height: 58vh; overflow: auto; color: var(--dim2);
@@ -514,7 +515,8 @@
     <span class="side r"></span>
   </div>
   <div class="pmain">
-    <textarea id="impText"></textarea>
+    <textarea id="impText" spellcheck="false" autocapitalize="off" autocorrect="off"
+      placeholder="分组名称,#genre#&#10;频道名称1,频道地址1&#10;频道名称2,频道地址2"></textarea>
     <div class="chips">
       <button class="chip on" id="modeAppend">追加（同名同地址跳过）</button>
       <button class="chip" id="modeReplace">覆盖（清空现有再导入）</button>
