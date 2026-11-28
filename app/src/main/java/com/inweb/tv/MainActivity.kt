@@ -606,10 +606,20 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
      * 直接把过渡黑幕改成错误屏：标题写在台名的位置，下面一行写去处，就这两行字。
      */
     private fun showErrorScreen(title: String, hint: String) {
+        // 只盖黑幕不停页面的话，底下的播放器还在跑：声音继续、流量继续，
+        // 用户看着“无法播放”却能听见节目——看着就是“说播不了其实在播”。
         webView.stopLoading()
         webView.removeCallbacks(videoWatch)
         webView.removeCallbacks(frameWatch)
+        webView.removeCallbacks(fsWatch)
         disarmPlayTimeout()
+        cssFullscreen = false
+        setSoundOn(false)
+        // 先暂停再看门狗：stopLoading 停不了已经在播的媒体
+        webView.evaluateJavascript(PAUSE_MEDIA_JS, null)
+        // 换成空白页：文档一销毁，播器、解码器、JS 堆一起走干净。
+        // onPageStarted 对 about: 开头的地址直接 return，不会把这张错误屏顶掉。
+        if (webView.url != BLANK_PAGE) webView.loadUrl(BLANK_PAGE)
         coverFailed = true
         val cover = transitionCover ?: newTransitionCover()
         cover.animate().cancel()
@@ -2394,6 +2404,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         // 首帧到位后黑幕最多再压这么久等容器停稳：页面缩放一般一两拍内就收敛了
         const val FRAME_SETTLE_MS = 1_200L
         const val PLAY_ERROR_TEXT = "该频道暂时无法播放"
+        // 空白页：起播失败后把页面换掉，媒体才真的停
+        const val BLANK_PAGE = "about:blank"
 
         // 焦点记忆存储名
         const val PREFS = "panel_focus"
@@ -2893,19 +2905,43 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                   window.scrollTo(0, 0);
                 } catch (e) {}
               }
-              // 把容器重新摆到 <html> 的最后一个子节点。
-              // z-index 已经顶到 int 上限，再往上没有数字可用；同 z-index 的两个定位层
-              // 由 DOM 顺序决定谁在上面，而站点的广告/遮罩是后来才插到 <html> 末尾的，
-              // 于是它压在容器上。每轮把容器再提一次就压回去。
-              // 只在真需要挪的时候动：每次 appendChild 都是一次重排，不能每轮都做。
-              function raiseWrap(wrap) {
+              // 把容器顶回最上层。两个动作缺一不可：
+              //  1) z-index 写回 int 上限 —— 站点会主动把全屏层的 z-index 降一档
+              //     （345iptv 就是这么干的：我们的被改成 2147482647，它的广告 2147483647，
+              //     差 1000 就能反过来压住直播画面），所以每轮都重写，带 !important。
+              //  2) 不是 <html> 最后一个子节点就再 append 一次 —— 同 z-index 的定位层
+              //     由 DOM 顺序决定谁在上，而广告是后来插的。
+              // 只在真需要写/挪的时候动，避免多余的重排。
+              function ensureTop(wrap) {
                 try {
+                  if (wrap.style.zIndex !== '2147483647') {
+                    wrap.style.setProperty('z-index', '2147483647', 'important');
+                  }
                   var de = document.documentElement;
                   if (de && wrap.parentNode === de && de.lastElementChild !== wrap) {
                     de.appendChild(wrap);
-                    // 只在真动手时打：频率本来就低，留着能看出站点往上层插了什么
-                    console.log('[tvfs] re-raise, siblings=' + de.children.length +
-                      ' last=' + (de.lastElementChild ? de.lastElementChild.tagName : '-'));
+                    console.log('[tvfs] re-raise, last=' +
+                      (de.lastElementChild ? de.lastElementChild.tagName : '-'));
+                  }
+                } catch (e) {}
+              }
+              // 光靠每秒一轮轮询不够：站点的广告层比轮询快，中间那段时间画面就被盖着。
+              // 用 MutationObserver 盯着两件事，插层/改样式当场就纠回去：
+              //  - <html> 的子节点变化（广告层被插到末尾）
+              //  - 容器自己的 style 变化（z-index 被降档）
+              // 两个回调都只调 ensureTop，条件不满足就不再动作，不会自己触发自己成死循环。
+              function guardWrap(wrap) {
+                try {
+                  if (!window.__tvDocObs) {
+                    window.__tvDocObs = new MutationObserver(function () {
+                      var s = window.__tvFs;
+                      if (s && s.wrap) ensureTop(s.wrap);
+                    });
+                    window.__tvDocObs.observe(document.documentElement, { childList: true });
+                  }
+                  if (!wrap.__tvStyleObs) {
+                    wrap.__tvStyleObs = new MutationObserver(function () { ensureTop(wrap); });
+                    wrap.__tvStyleObs.observe(wrap, { attributes: true, attributeFilter: ['style'] });
                   }
                 } catch (e) {}
               }
@@ -2913,7 +2949,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
                 // 先对位再定尺寸：偏移可能在上两轮之间变过
                 placeWrap(wrap);
                 lockPageScroll();
-                raiseWrap(wrap);
+                ensureTop(wrap);
+                guardWrap(wrap);
                 var size = viewportSize();
                 if (!size) return;
                 var w = size.w, h = size.h;
