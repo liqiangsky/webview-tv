@@ -14,7 +14,7 @@ import java.io.File
  *
  * 存储 filesDir/site_scripts.json：
  *
- *     { "scripts": [ { "id": "s1", "name": "江苏卫视", "code": "..." } ],
+ *     { "scripts": [ { "id": "s1", "name": "某频道", "code": "..." } ],
  *       "binds":   { "https://example.com/": "s1" } }
  *
  * scripts 是配置页里能新建/编辑/删除的条目；binds 是频道级的绑定（按频道地址记，

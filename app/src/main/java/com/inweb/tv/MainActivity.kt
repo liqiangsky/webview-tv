@@ -1347,8 +1347,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     }
 
     /**
-     * 进登录页前把直播停下：掐掉还在跑的请求，再把页面里的 video/audio 全按停。
-     * 回来时不接这半口气的流，直接重播当前频道。
+     * 进登录页前把直播停下：掐掉还在跑的请求，把页面里的 video/audio 全按停，
+     * 再把文档换成空白页。pause() 只停得住这一次：站点自己的播放器会在 stall /
+     * 可见性变化里重新 play，直播流就又接上了，声音照响——“开着登录页还在播放”就是这个。
+     * 只有销毁文档（播放器、解码器、JS 一起走）才真的没声音；回来重播当前频道。
      */
     private fun stopPlayback() {
         webView.stopLoading()
@@ -1359,6 +1361,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         webView.removeCallbacks(coverTimeout)
         if (cssFullscreen) exitCssFullscreen()
         webView.evaluateJavascript(PAUSE_MEDIA_JS, null)
+        // 没有台在播（首页/错误屏）时不换页：没东西要停，别把当前页面弄成白屏
+        if (playingChannel() != null && webView.url != BLANK_PAGE) webView.loadUrl(BLANK_PAGE)
     }
 
     /** 沉浸式全屏：隐藏状态栏和导航栏 */
@@ -2951,8 +2955,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               }
               // 把容器顶回最上层。两个动作缺一不可：
               //  1) z-index 写回 int 上限 —— 站点会主动把全屏层的 z-index 降一档
-              //     （345iptv 就是这么干的：我们的被改成 2147482647，它的广告 2147483647，
-              //     差 1000 就能反过来压住直播画面），所以每轮都重写，带 !important。
+              //     （常见是改成 2147482647，它自己的广告层是 2147483647，差 1000
+              //     就能反过来压住直播画面），所以每轮都重写，带 !important。
               //  2) 不是 <html> 最后一个子节点就再 append 一次 —— 同 z-index 的定位层
               //     由 DOM 顺序决定谁在上，而广告是后来插的。
               // 只在真需要写/挪的时候动，避免多余的重排。
