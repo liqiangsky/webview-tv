@@ -677,12 +677,16 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         // 底层常驻播放：直接播第一个频道，遮罩随时呼出
         ChannelStore.onChanged = { onStoreChanged() }
         reloadChannels()
-        val first = ChannelStore.channels().firstOrNull()
-        if (first == null) showPairing()          // 出厂不带频道：先教用户怎么连配置页
+        // 接着上次看的台。那个台要是被删了（或首页还没播过），就退回第一个分组的第一个频道；
+        // 分组里可能只有空分组，所以取第一个「有频道」的分组，别被空组挡住。
+        val start = lastChannelUrl()?.let { u ->
+            groups.asSequence().flatMap { it.channels.asSequence() }.firstOrNull { it.url == u }
+        } ?: groups.asSequence().mapNotNull { it.channels.firstOrNull() }.firstOrNull()
+        if (start == null) showPairing()          // 出厂不带频道：先教用户怎么连配置页
         else {
-            playingLine = first.line
+            playingLine = start.line
             renderPanel()
-            openChannel(first.url)
+            openChannel(start.url)
         }
         renderQrCard()
         // 节目单到货（闹钟或启动补拉）后重画信息栏
@@ -1247,6 +1251,16 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         curGroupIdx = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("group", 0)
     }
 
+    /** 上次在播的频道：只存地址，读回时到当前频道表里按地址找 */
+    private fun persistChannelUrl(url: String) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (prefs.getString("channelUrl", null) == url) return
+        prefs.edit().putString("channelUrl", url).apply()
+    }
+
+    private fun lastChannelUrl(): String? =
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString("channelUrl", null)
+
     // ---------- 直播页 ----------
 
     /**
@@ -1271,6 +1285,8 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         showTransitionCover()
         webView.visibility = View.VISIBLE
         webView.requestFocus()
+        // 记下这次播的台：下次启动接着播它（按地址记，行号会随频道表增删整体位移）
+        persistChannelUrl(url)
         // 配置页从频道行打开的日志从这里往后看，就是这一次播的
         TvLog.record("▶ 播放 " + url)
         webView.loadUrl(url)
