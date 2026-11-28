@@ -126,6 +126,20 @@ object EpgManager {
     }
 
     /**
+     * 整份替换自定义源（备份恢复用）：顺序照搬，写完按新列表拉一次；
+     * 新列表为空时顺手清掉旧数据，跟手动删完最后一个源一致。
+     */
+    fun replaceSources(urls: List<String>) {
+        val list = urls.map { it.trim() }
+            .filter { it.startsWith("http://") || it.startsWith("https://") }
+            .distinct()
+        if (!::app.isInitialized) return
+        prefs.edit().putString(KEY_SOURCES, list.joinToString("\n")).apply()
+        // 源换了旧数据就不算数：拉一次，空列表在 refreshNow 里就是清空
+        refreshNow(app) { }
+    }
+
+    /**
      * 没配置源就等于没有节目单：硬盘上旧的文件、内存里的表一起清掉。
      * 只在 epg 线程上调用（磁盘和字段都不是线程安全的）。
      */

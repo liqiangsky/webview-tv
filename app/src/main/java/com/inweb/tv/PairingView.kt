@@ -21,7 +21,7 @@ import android.widget.TextView
  * 二维码由 zxing 本地算成 Bitmap，不走任何出图接口，配置地址不会离开内网。
  *
  * 视觉按 tvOS 那套：纯黑底、大字号标题、次级文字压暗、主操作是白色胶囊。
- * 横屏电视矮，二维码和文字并排成一行，竖直堆叠会顶出屏幕。
+ * 横屏设备矮，二维码和文字并排成一行，竖直堆叠会顶出屏幕。
  */
 class PairingView(context: Context) : FrameLayout(context) {
 
@@ -56,7 +56,7 @@ class PairingView(context: Context) : FrameLayout(context) {
             addView(pinText, lpWrap(0, dp(2)))
             addView(ipWarning, lpWrap(0, dp(2)))
             addView(label(12f, 0xFF8E8E93.toInt()).apply {
-                text = "手机浏览器扫码或照地址输入，在电视上登录网站请另装「电视遥控」App"
+                text = "手机浏览器扫码或照地址输入，登录网站用配置页里的遥控"
                 setLineSpacing(0f, 1.3f)
                 maxWidth = dp(360)
             }, lpWrap(dp(10), 0))
@@ -116,11 +116,11 @@ class PairingView(context: Context) : FrameLayout(context) {
         visibility = GONE
     }
 
-    /** 刷新地址与配对码；电视换过网络后 IP 会变，这里跟着重画一次 */
+    /** 刷新地址与配对码；设备换过网络后 IP 会变，这里跟着重画一次 */
     fun refresh(url: String?, pin: String) {
         urlText.text = url?.removePrefix("http://") ?: "未联网：连上 WiFi 后再试"
         pinText.text = "配对码  $pin"
-        ipWarning.text = if (url == null) "" else "手机要和电视连同一个网络"
+        ipWarning.text = if (url == null) "" else "手机要和设备连同一个网络"
         // 只有真取不到地址才是报错，平时这句只是提示，别用红色吓人
         ipWarning.setTextColor(if (url == null) 0xFFFF453A.toInt() else 0xFF8E8E93.toInt())
         url?.let { qrImage.setImageBitmap(Qr.bitmap(it, 480)) }

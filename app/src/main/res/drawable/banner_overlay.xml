@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 横幅覆盖层：网格纹理 + 六格播放标 + INWEB 字标。
-     全部纯色，不能带 gradient —— 带渐变的矢量会被 aapt 移到 v24，API 21-23 的电视就拿不到。
+     全部纯色，不能带 gradient —— 带渐变的矢量会被 aapt 移到 v24，API 21-23 的设备就拿不到。
      排版按 320x180 定死：标志占左三分之一，字标从 165 起，两边各留 30 以上。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="320dp"

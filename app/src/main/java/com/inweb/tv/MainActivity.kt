@@ -55,9 +55,9 @@ import java.util.zip.InflaterInputStream
  * 底层全屏 WebView 常驻播放，按 OK / 点屏呼出遮罩。遮罩一屏三列：
  * 左 频道信息（在播/预览、EPG、进度、时间，纯展示）；
  * 中 频道列表（上下选台、左右换组、OK 切台并收起，键位与最初设计一致）；
- * 右 手机配置二维码（地址/配对码，电视端只展示回显）。
- * 网站登录不在电视上列条目——手机配置页里点条目的「打开」，电视直接开该站登录页。
- * 频道与登录网址全部由配置网页写入，电视端只读展示；BACK 收起遮罩。
+ * 右 手机配置二维码（地址/配对码，设备端只展示回显）。
+ * 网站登录不在设备上列条目——手机配置页里点条目的「打开」，设备直接开该站登录页。
+ * 频道与登录网址全部由配置网页写入，设备端只读展示；BACK 收起遮罩。
  */
 class MainActivity : Activity(), ConfigServer.ConfigHost {
 
@@ -379,7 +379,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
               Object.defineProperty(navigator, 'userAgentData', {
                 configurable: true, get: function () { return meta; }
               });
-              // 触摸能力同样按桌面报：电视没有触摸屏，WebView 却固定给 5 个触摸点、
+              // 触摸能力同样按桌面报：设备没有触摸屏，WebView 却固定给 5 个触摸点、
               // 指针算 coarse，站点拿这两条加屏幕尺寸就能判定成手机
               try {
                 Object.defineProperty(navigator, 'maxTouchPoints', {
@@ -823,10 +823,10 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
 
     override fun play(group: String, name: String, url: String): Boolean {
         if (isFinishing) return false
-        // 优先认列表里已有的条目，行号和台标才对得上；网页刚加完还没回读时退回合成条目
+        // 优先认列表里已有的条目，行号才对得上；网页刚加完还没回读时退回合成条目
         val ch = groups.asSequence().flatMap { it.channels.asSequence() }
             .firstOrNull { it.url == url }
-            ?: Channel(name, url, -1, group, name, "HD")
+            ?: Channel(name, url, -1, group, "HD")
         hidePairing()
         hidePanel()
         playingLine = ch.line
@@ -1029,7 +1029,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         infoQuality.visibility = if (target.quality.isNotEmpty()) View.VISIBLE else View.GONE
         infoSource.text = target.source
         infoSource.visibility = if (target.source.isNotEmpty()) View.VISIBLE else View.GONE
-        // 电视只有光标没有鼠标，信息栏必须说清这是“在播的台”还是“正在预览的台”
+        // 设备只有光标没有鼠标，信息栏必须说清这是“在播的台”还是“正在预览的台”
         infoState.text = if (playing) "正在播放" else "预览中"
         infoState.setBackgroundResource(
             if (playing) R.drawable.info_state_playing else R.drawable.info_state_preview
@@ -1043,7 +1043,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     private fun renderGuide() {
         val ch = infoTarget ?: return
         val guide = if (EpgManager.ready()) {
-            EpgManager.guideFor(ch.name).takeIf { it.total > 0 } ?: EpgManager.guideFor(ch.logo)
+            EpgManager.guideFor(ch.name).takeIf { it.total > 0 }
         } else null
         if (guide == null || guide.total == 0) {
             infoNow.text = when {
@@ -1071,7 +1071,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
         setGuideProgress(guide.percent)
     }
 
-    /** 离这一档结束还有多久：不足一分钟按一分钟算，跨小时也照样用分钟说（电视上一眼要看完） */
+    /** 离这一档结束还有多久：不足一分钟按一分钟算，跨小时也照样用分钟说（设备上一眼要看完） */
     private fun leftMinutes(stopAt: Long): String {
         val m = Math.ceil((stopAt - System.currentTimeMillis()) / 60000.0).toInt()
         return if (m <= 0) "即将结束" else if (m < 60) "${m}分" else "${m / 60}时${m % 60}分"
@@ -1752,7 +1752,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
     }
 
     /**
-     * 直播画面里屏蔽网页触摸；手机/电视点一下屏幕即可呼出遮罩
+     * 直播画面里屏蔽网页触摸；手机/设备点一下屏幕即可呼出遮罩
      * （遮罩打开时触摸全部交给原生面板，点面板本体以外的空白处关闭）
      */
     override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
@@ -3489,7 +3489,7 @@ class MainActivity : Activity(), ConfigServer.ConfigHost {
             })();
         """
 
-        // 无面板时按这几键呼出频道面板（MENU 是不少电视遥控器的“菜单”键）
+        // 无面板时按这几键呼出频道面板（MENU 是不少遥控器的“菜单”键）
         val PANEL_KEYS = intArrayOf(
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_DPAD_UP,

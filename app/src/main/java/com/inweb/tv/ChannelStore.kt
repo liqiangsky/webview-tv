@@ -9,10 +9,11 @@ import kotlin.random.Random
 /**
  * 频道与登录网址的唯一数据源。
  *
- * 数据全部由配置网页（手机/浏览器）写入，电视端只读和展示，所以这里既负责
+ * 数据全部由配置网页（手机/浏览器）写入，设备端只读和展示，所以这里既负责
  * 落盘也负责解析/序列化。两个文件都在 getExternalFilesDir 下，卸载应用即清除，
  * adb 也能直接 push 调试：
- *   channels.txt —— DIYP txt 格式（“分组名,#genre#” + 每行“名称,地址[,台标,清晰度]”）
+ *   channels.txt —— DIYP txt 格式（“分组名,#genre#” + 每行“名称,地址[,台标,清晰度,来源]”；
+ *                   第三列是那个格式的台标位，应用里没有对应字段，只原样占位、不读)
  *   logins.txt   —— 每行“名称,地址”
  *
  * 分组就是文件里的“分组名,#genre#”标题行，底下没有频道也照样成立，所以空分组
@@ -88,7 +89,7 @@ object ChannelStore {
                 else -> {
                     val g = group.ifBlank { "其他频道" }.trim()
                     if (db.groups.none { it == g }) db.groups += g
-                    db.channels += Channel(name.trim(), url.trim(), -1, g, name.trim(),
+                    db.channels += Channel(name.trim(), url.trim(), -1, g,
                         quality.trim(), source.trim())
                     Result.success(Unit)
                 }
@@ -114,7 +115,6 @@ object ChannelStore {
                 list[i] = old.copy(
                     name = finalName, url = finalUrl,
                     group = g,
-                    logo = if (newName.isBlank()) old.logo else finalName,
                     // 清晰度同样可以空：清空就真的清掉，面板上不显示
                     quality = newQuality.trim(),
                     // 来源是自由备注：清空就真的清掉，不沿用旧值
@@ -159,8 +159,8 @@ object ChannelStore {
     }
 
     /**
-     * 导入只认“名称,地址”：后面就算还带着别名、清晰度，也一律当没有。
-     * 补两个空列而不是直接截成两列，是为了让解析走到“台标缺省=名称、清晰度=空”，
+     * 导入只认“名称,地址”：后面就算还带着台标、清晰度，也一律当没有。
+     * 补两个空列而不是直接截成两列，是为了让解析走到“清晰度=空”，
      * 不会因为少列而被当成 HD。
      */
     private fun trimImportColumns(text: String): String =
@@ -205,6 +205,20 @@ object ChannelStore {
         }
     }
 
+    /**
+     * 整份替换（备份恢复用）：分组顺序、空分组、频道各字段都按传进来的写。
+     * 不走 importChannels 那条“只认两列”的解析，免得台标/清晰度/来源被抹掉。
+     */
+    fun replaceAll(groups: List<String>, channels: List<Channel>): Result<Unit> =
+        mutateDb { db ->
+            db.groups.clear()
+            db.groups += groups
+            for (ch in channels) if (db.groups.none { it == ch.group }) db.groups += ch.group
+            db.channels.clear()
+            db.channels += channels
+            Result.success(Unit)
+        }
+
     private fun indexOf(list: List<Channel>, line: Int, group: String, name: String, url: String): Int {
         if (line >= 0) {
             val byLine = list.indexOfFirst { it.line == line }
@@ -231,7 +245,7 @@ object ChannelStore {
     /**
      * 解析频道文本：
      *  - “分组名,#genre#”开一个分组（DIYP txt 格式），后面没有频道也算分组存在
-     *  - “频道名称,频道地址,台标名称,清晰度,来源”一行一个，后三列可省略（台标名默认取频道名称，清晰度默认 HD，来源默认空），地址后可加 “$分组名”
+     *  - “频道名称,频道地址,台标名称,清晰度,来源”一行一个，后三列可省略（第三列台标位已废弃、读了也不用，清晰度默认 HD，来源默认空），地址后可加 “$分组名”
      *  - “#”开头为注释；分组之前的内容归“其他频道”
      */
     private fun parse(text: String): Db {
@@ -255,18 +269,18 @@ object ChannelStore {
             val g = (if (dollar >= 0) urlField.substring(dollar + 1).trim() else group)
                 .ifEmpty { "其他频道" }
             if (groups.none { it == g }) groups += g
-            val logo = parts.getOrElse(2) { "" }.trim().ifEmpty { name }
+            // 第三列是 DIYP 的台标位，应用里没有对应字段，跳过；
             // 第四列缺省当 HD（老文件都是这么写的）；写了但留空就是空，不强塞默认值
             val quality = if (parts.size > 3) parts[3].trim() else "HD"
             val source = parts.getOrElse(4) { "" }.trim()
-            if (url.isNotEmpty()) out += Channel(name, url, idx, g, logo, quality, source)
+            if (url.isNotEmpty()) out += Channel(name, url, idx, g, quality, source)
         }
         return Db(groups, out)
     }
 
     /**
      * 按分组顺序落盘：每个分组一行标题，后面跟它的频道，空分组只留标题。
-     * 台标与频道同名、清晰度又是 HD、又没有来源时只写两列，保持文件干净；
+     * 清晰度是 HD、又没有来源时只写两列，保持文件干净；
      * 否则从第三列起必须一路写满——第三列台标、第四列清晰度、第五列来源，跳着写会串位。
      */
     private fun serialize(db: Db): String {
@@ -293,9 +307,9 @@ object ChannelStore {
 
     private fun appendChannel(sb: StringBuilder, ch: Channel) {
         sb.append(ch.name).append(',').append(ch.url)
-        val customLogo = ch.logo.isNotEmpty() && ch.logo != ch.name
-        if (customLogo || ch.quality != "HD" || ch.source.isNotEmpty()) {
-            sb.append(',').append(if (customLogo) ch.logo else ch.name)
+        if (ch.quality != "HD" || ch.source.isNotEmpty()) {
+            // 第三列是 DIYP 的台标位：写频道名占位，不让后面两列往前串
+            sb.append(',').append(ch.name)
             // 清晰度原样写（可能是空的）：空值写成空列，读回时才是空的
             sb.append(',').append(ch.quality)
             if (ch.source.isNotEmpty()) sb.append(',').append(ch.source)
@@ -353,6 +367,13 @@ object ChannelStore {
         if (list.size == before) fail("地址不存在") else Result.success(Unit)
     }
 
+    /** 整份替换登录网址（备份恢复用）；非 http(s) 的条目直接丢掉 */
+    fun replaceLogins(list: List<LoginEntry>): Result<Unit> = mutateLogins { target ->
+        target.clear()
+        target += list.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }
+        Result.success(Unit)
+    }
+
     private fun mutateLogins(block: (MutableList<LoginEntry>) -> Result<Unit>): Result<Unit> =
         synchronized(lock) {
             val list = logins().toMutableList()
@@ -369,7 +390,7 @@ object ChannelStore {
 
     // ---------------- 配对码 ----------------
 
-    /** 4 位数字配对码：首次访问随机生成并持久化，电视屏幕展示，配置网页请求头带回校验 */
+    /** 4 位数字配对码：首次访问随机生成并持久化，设备屏幕展示，配置网页请求头带回校验 */
     val pin: String
         get() = synchronized(lock) {
             prefs.getString(KEY_PIN, null) ?: Random.nextInt(1000, 10000).toString().also {

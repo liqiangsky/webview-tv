@@ -15,16 +15,16 @@ import java.net.URLDecoder
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 配置服务：电视端起一个极简 HTTP 服务器，手机浏览器扫码打开就能管频道和登录网址。
+ * 配置服务：设备端起一个极简 HTTP 服务器，手机浏览器扫码打开就能管频道和登录网址。
  *
- * 做五类事：下发 assets/config.html、回显当前数据、执行增删改、让电视切台/开登录页、
+ * 做五类事：下发 assets/config.html、回显当前数据、执行增删改、让设备切台/开登录页、
  * 以及一条 /remote 的 WebSocket 供网页遥控持续送光标指令。
  * 不是通用服务器——不解析 MIME 协商、不分块传输、不支持 keep-alive，每个请求一个连接，
  * 响应头统一 Connection: close，够用且不容易被边角情况搞崩。
  * 只有 WebSocket 是长连接：触控板每帧几十个事件走「一次请求一个连接」的 HTTP 会把服务压垮，
  * 也更没法跟手。
  *
- * 门禁：api 接口必须带 X-Pin 请求头（或 ?pin=）且与电视屏幕显示的 4 位配对码一致，
+ * 门禁：api 接口必须带 X-Pin 请求头（或 ?pin=）且与设备屏幕显示的 4 位配对码一致，
  * 否则 401。页面本身不校验，否则连输 PIN 的界面都打不开。
  */
 class ConfigServer(
@@ -50,7 +50,7 @@ class ConfigServer(
     /** 在连的网页遥控数：登录页左上角那行状态字要跟着报数 */
     private val remoteClients = AtomicInteger(0)
 
-    /** 在连遥控页的输出流：电视这边改了缩放要主动推回去，不能让页面猜 */
+    /** 在连遥控页的输出流：设备这边改了缩放要主动推回去，不能让页面猜 */
     private val remoteStreams = java.util.concurrent.CopyOnWriteArrayList<OutputStream>()
 
     fun start() {
@@ -140,6 +140,8 @@ class ConfigServer(
             method == "GET" && path == "api/state" -> sendApi(out, pin) { stateJson() }
             // 运行日志：配置页「日志」按钮直接用
             method == "GET" && path == "api/log" -> sendApi(out, pin) { logJson() }
+            // 整份备份：配置页「备份与恢复」导出时取，浏览器拿到就当文件存
+            method == "GET" && path == "api/backup" -> sendApi(out, pin) { Backup.export() }
             method == "POST" && path.startsWith("api/") ->
                 sendApi(out, pin) { dispatch(path.removePrefix("api/"), parseJson(body)) }
             else -> sendText(out, 404, "text/plain; charset=utf-8", "not found")
@@ -212,7 +214,7 @@ class ConfigServer(
     }
 
     /**
-     * 把电视这边的缩放读数推给所有在连的遥控页。
+     * 把设备这边的缩放读数推给所有在连的遥控页。
      * 走一条串行队列：两次快按各起一个线程写，帧的先后顺序就可能翻过来。
      */
     fun pushRemoteState() {
@@ -402,7 +404,7 @@ class ConfigServer(
                 list.put(
                     JSONObject()
                         .put("line", ch.line).put("name", ch.name)
-                        .put("url", ch.url).put("logo", ch.logo)
+                        .put("url", ch.url)
                         .put("quality", ch.quality).put("source", ch.source)
                 )
             }
@@ -449,7 +451,7 @@ class ConfigServer(
         val missing = JSONArray()
         for (g in ChannelStore.groups()) {
             for (ch in g.channels) {
-                if (!EpgManager.hasGuide(ch.name) && !EpgManager.hasGuide(ch.logo)) {
+                if (!EpgManager.hasGuide(ch.name)) {
                     missing.put(JSONObject().put("name", ch.name).put("group", g.name))
                 }
             }
@@ -537,7 +539,7 @@ class ConfigServer(
                 )
                 // 回最新状态：配置页靠它把「播放中」标到刚点的这一行
                 return if (onMain { hostProvider()?.play(ch.group, ch.name, ch.url) == true })
-                    stateJson() else fail("电视当前不在播放页")
+                    stateJson() else fail("设备当前不在播放页")
             }
             "epg.state" -> return epgState()
             "epg.refresh" -> {
@@ -557,6 +559,11 @@ class ConfigServer(
                 if (!EpgManager.removeSource(arg.str("url"))) return fail("没找到这个源")
                 return epgState()
             }
+            // 备份恢复：整份覆盖，成功把新状态一起回给页面（列表得当场换成新的）
+            "restore" -> return Backup.restore(arg.optString("json", "")).fold(
+                { summary -> JSONObject(stateJson()).put("msg", summary).toString() },
+                { fail(it.message ?: "恢复失败") }
+            )
             "cache.list" -> {
                 val stats = ScriptCache.stats(context)
                 val arr = JSONArray()
@@ -577,7 +584,7 @@ class ConfigServer(
                 val url = arg.str("url")
                 if (!url.startsWith("http")) return fail("地址要以 http 开头")
                 return if (onMain { hostProvider()?.openLogin(url); true }) ok()
-                else fail("电视当前不在播放页")
+                else fail("设备当前不在播放页")
             }
             else -> return fail("未知操作：$op")
         }

@@ -37,7 +37,7 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 /**
- * 网页登录页（配置页「电视遥控」的配套）：全屏可交互 WebView + 悬浮光标。
+ * 网页登录页（配置页「设备遥控」的配套）：全屏可交互 WebView + 悬浮光标。
  * 手机只发相对位移和动作，本页把它们换算成光标位置、鼠标源的 MotionEvent（SOURCE_MOUSE +
  * TOOL_TYPE_MOUSE）打给 WebView，网页收到的就是 PC 鼠标那一套：悬停、单击/双击、拖拽、长按。
  * 两处内核不给的（dblclick 的 click_count、会崩内核的 ACTION_SCROLL）由 JS 补齐。
@@ -51,7 +51,7 @@ class LoginActivity : Activity() {
     private lateinit var statusText: TextView
     private var remoteClients = 0
 
-    /** 页面缩放百分比：电视上的缩放按钮和手机遥控页共用这一份档位 */
+    /** 页面缩放百分比：设备上的缩放按钮和手机遥控页共用这一份档位 */
     private var zoom = ZOOM_STEP_BASE
 
     private var dragging = false
@@ -128,7 +128,7 @@ class LoginActivity : Activity() {
             addView(zoomCell("－") { stepZoom(-1) })
             addView(zoomCell("1×") { setZoom(ZOOM_STEP_BASE) })
             addView(zoomCell("＋") { stepZoom(1) })
-            // 电视遥控器上 Back 也能退，但触屏观众要找返回键很费劲
+            // 遥控器上 Back 也能退，但触屏观众要找返回键很费劲
             addView(zoomCell("关闭") { finish() })
         }
         root.addView(bar, FrameLayout.LayoutParams(
@@ -141,7 +141,7 @@ class LoginActivity : Activity() {
 
         val url = intent.getStringExtra("url")
         if (url != null) webView.loadUrl(url)
-        Toast.makeText(this, "电视上的直播已暂停，登录完按「关闭」或返回键退出，会自动重播当前频道", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "设备上的直播已暂停，登录完按「关闭」或返回键退出，会自动重播当前频道", Toast.LENGTH_LONG).show()
 
         val app = application as TvApp
         // 遥控指令从配置服务的 WebSocket 进来，本页在前台时才有去处
@@ -420,7 +420,7 @@ class LoginActivity : Activity() {
 
     // ---------------- 缩放 ----------------
 
-    /** 一档 = ±0.1 倍，步进只在电视这边算，手机遥控页读同一份数才不会岔开 */
+    /** 一档 = ±0.1 倍，步进只在设备这边算，手机遥控页读同一份数才不会岔开 */
     private fun stepZoom(dir: Int) {
         setZoom(zoom + dir * ZOOM_STEP)
     }
@@ -428,7 +428,7 @@ class LoginActivity : Activity() {
     private fun setZoom(percent: Int) {
         zoom = percent.coerceIn(ZOOM_MIN, ZOOM_MAX)
         applyZoom()
-        // 回报给服务：手机遥控页上的读数跟着电视走
+        // 回报给服务：手机遥控页上的读数跟着设备走
         val app = application as TvApp
         app.remoteZoom = zoom
         app.config.pushRemoteState()
@@ -480,7 +480,7 @@ class LoginActivity : Activity() {
     private fun updateStatus() {
         val ip = localIp() ?: "未联网?"
         statusText.text = "遥控 http://$ip:${TvApp.CONFIG_PORT} · 已连接手机 $remoteClients" +
-            if (remoteClients > 0) " ✔" else "（手机打开配置网页「电视遥控」）"
+            if (remoteClients > 0) " ✔" else "（手机打开配置网页「设备遥控」）"
     }
 
     private fun localIp(): String? {

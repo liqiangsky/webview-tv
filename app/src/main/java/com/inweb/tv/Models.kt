@@ -9,7 +9,6 @@ data class Channel(
     val url: String,
     val line: Int,
     val group: String,
-    val logo: String,
     val quality: String,
     /** 来源：用户自己填的备注（哪个站/哪个 App 来的），默认空，应用不解析它 */
     val source: String = ""
@@ -17,7 +16,7 @@ data class Channel(
 
 data class Group(val name: String, val channels: List<Channel>)
 
-/** 登录网址条目：电视端只负责打开它（网页遥控当鼠标），增删改都在配置网页做 */
+/** 登录网址条目：设备端只负责打开它（网页遥控当鼠标），增删改都在配置网页做 */
 data class LoginEntry(val name: String, val url: String)
 
 /**

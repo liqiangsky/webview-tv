@@ -22,7 +22,7 @@
     android:paddingEnd="16dp"
     android:paddingBottom="14dp">
 
-    <!-- 电视只有光标没有鼠标，必须说清这是“在播的台”还是“正在预览的台” -->
+    <!-- 设备只有光标没有鼠标，必须说清这是“在播的台”还是“正在预览的台” -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

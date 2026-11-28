@@ -118,6 +118,21 @@ object SiteScripts {
         Result.success(Unit)
     }
 
+    /**
+     * 整份替换（备份恢复用）：脚本和绑定一起换。
+     * 指向不存在脚本的绑定直接丢掉，不然播放时按 id 找不到人。
+     */
+    fun replaceAll(items: JSONArray?, bindsIn: JSONObject?): Result<Int> = synchronized(lock) {
+        val list = parseScripts(items)
+        val map = parseBinds(bindsIn)
+        val ids = list.mapTo(HashSet()) { it.id }
+        map.entries.removeAll { it.value != NONE && it.value !in ids }
+        scripts = list
+        binds = map
+        persist()
+        Result.success(list.size)
+    }
+
     /** 兼容旧接口：整段读（配置页已改成逐条管理，这里只留给调试） */
     fun raw(): String = synchronized(lock) { dump().toString(2) }
 

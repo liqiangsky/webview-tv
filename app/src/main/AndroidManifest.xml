@@ -15,7 +15,7 @@
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
-    <!-- 手机装了也要能翻转，重力传感器缺失的电视盒子不能因此被过滤掉 -->
+    <!-- 手机装了也要能翻转，重力传感器缺失的盒子不能因此被过滤掉 -->
     <uses-feature
         android:name="android.hardware.sensor.accelerometer"
         android:required="false" />

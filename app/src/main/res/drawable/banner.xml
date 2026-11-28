@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android TV 横幅 320x180。电视桌面只显示这张图，不会再单独印应用名，所以字标画在里面。
+<!-- Android TV 横幅 320x180。设备桌面只显示这张图，不会再单独印应用名，所以字标画在里面。
      底色用 shape 渐变（任何 API 都有），图形和字标放在 banner_overlay 里的纯色矢量：
      矢量里一旦用了 gradient 就会被 aapt 收进 drawable-anydpi-v24，
-     而电视盒子还有 5.0/6.0（API 21-23）在用，那样它们就没有横幅了。 -->
+     而盒子还有 5.0/6.0（API 21-23）在用，那样它们就没有横幅了。 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:width="320dp"

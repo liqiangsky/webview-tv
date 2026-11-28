@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f2f2f7">
-<title>电视配置</title>
+<title>设备配置</title>
 <script>
   /* 主题在样式生效前就位，避免切页时闪一下 */
   try { if (localStorage.getItem('tvtheme') === 'dark') document.documentElement.className = 'dark'; } catch (e) {}
@@ -222,6 +222,8 @@
   .act-full:active { opacity: .6; }
   .act-full.pri { background: var(--accent); color: #fff; font-weight: 600; }
   .act-full.danger { background: var(--card); color: var(--danger); }
+  /* 中性整行按钮：白卡片底，不抢主操作的蓝色，也不给成破坏性的红 */
+  .act-full.plain { background: var(--card); color: var(--fg); }
   .act-full.warn { background: var(--danger); color: #fff; border-radius: 10px; }
   /* 破坏性操作的二次确认说明：只在按下一次「删除」后出现 */
   .warnline { color: var(--danger); font-size: var(--fs-3); line-height: 1.5;
@@ -268,7 +270,7 @@
   .inrow .go { flex: none; background: var(--accent); color: #fff; border: 0; border-radius: 10px;
     padding: 10px 15px; font-size: var(--fs-2); font-family: inherit; font-weight: 600; }
   .inrow .go:active { transform: scale(.96); opacity: .75; }
-  /* 电视遥控：触控板是一块圆角卡片。touch-action:none 只加在这一块上，
+  /* 设备遥控：触控板是一块圆角卡片。touch-action:none 只加在这一块上，
      否则浏览器先抢手势（滚动、双指缩放），累积到的位移就是断断续续的，光标跟不住手指 */
   .pad { position: relative; height: 56vh; min-height: 300px; margin-top: 10px;
     background: var(--card); border-radius: 14px; overflow: hidden;
@@ -317,7 +319,7 @@
 
 <header>
   <div class="hd">
-    <h1>电视配置</h1><span class="sp"></span>
+    <h1>设备配置</h1><span class="sp"></span>
     <button class="ib" id="theme" aria-label="切换深浅色"><svg viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 010 16" fill="currentColor" stroke="none"/>
     </svg></button>
@@ -353,6 +355,8 @@
   <div class="group">
     <div class="row" data-page="dev"><div class="txt"><div class="nm">开发者调试</div></div>
       <span class="q" id="cntDev"></span><span class="chev"></span></div>
+    <div class="row" data-page="backup"><div class="txt"><div class="nm">备份与恢复</div></div>
+      <span class="chev"></span></div>
   </div>
 </main>
 
@@ -381,7 +385,7 @@
     <span class="side"><button class="back" data-back>返回</button></span>
     <h2>网站登录</h2>
     <span class="side r">
-      <button class="ib" id="rcFromLogin" aria-label="电视遥控"><svg viewBox="0 0 24 24">
+      <button class="ib" id="rcFromLogin" aria-label="设备遥控"><svg viewBox="0 0 24 24">
         <rect x="3.5" y="5.5" width="17" height="13" rx="4.5"/>
         <circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/>
       </svg></button>
@@ -397,7 +401,7 @@
 <div class="page" id="p-remote" hidden>
   <div class="navbar">
     <span class="side"><button class="back" data-back>返回</button></span>
-    <h2>电视遥控</h2>
+    <h2>设备遥控</h2>
     <span class="side r"><span class="rcst"><i id="rcDot"></i><span id="rcState">未连接</span></span>
       <button class="lnk sm" id="rcRe">重连</button></span>
   </div>
@@ -406,7 +410,7 @@
       <button class="chip mini" id="padScroll">单指滚动</button></div>
     <div class="pad" id="pad"><span class="dot" id="padDot"></span>
       <span class="tip" id="padTip">单指移动=悬停 · 轻点单击 · 二连点双击 · 长按按住拖拽 · 双指滚轮</span>
-      <span class="off" id="padOff" hidden>电视当前不在登录页</span></div>
+      <span class="off" id="padOff" hidden>设备当前不在登录页</span></div>
     <div class="chips">
       <button class="chip key" data-rk="back">返回</button>
       <button class="chip key" data-rk="refresh">刷新</button>
@@ -456,6 +460,36 @@
         <div class="note">画边框并记录实际尺寸</div></div>
         <button class="sw" role="switch" data-dev="frameMarkers" aria-checked="false"></button></div>
     </div>
+  </div>
+</div>
+
+<div class="page" id="p-backup" hidden>
+  <div class="navbar">
+    <span class="side"><button class="back" data-back>返回</button></span>
+    <h2>备份与恢复</h2>
+    <span class="side r"></span>
+  </div>
+  <div class="pmain">
+    <div class="group">
+      <div class="row noact"><div class="txt"><div class="nm">导出备份</div>
+        <div class="note">频道、登录网址、站点脚本、节目单源和开关；不含脚本缓存。</div></div>
+        <button class="lnk" id="bkExport">导出</button></div>
+    </div>
+
+    <div class="sec"><b>从备份恢复</b><span class="sp"></span></div>
+    <div class="group" id="bkBox" hidden>
+      <div class="row noact"><div class="txt"><div class="nm">备份时间</div>
+        <div class="u" id="bkWhen">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">来自</div>
+        <div class="u" id="bkFrom">—</div></div></div>
+      <div class="row noact"><div class="txt"><div class="nm">包含</div>
+        <div class="u" id="bkWhat">—</div></div></div>
+    </div>
+    <div class="hint" id="bkTip">选一份导出的 .json，看清内容再覆盖；整份替换，不能撤销。</div>
+    <input type="file" id="bkFile" accept="application/json,.json" hidden>
+    <button class="act-full pri" id="bkPick">选择备份文件</button>
+    <button class="act-full warn" id="bkGo" hidden>覆盖并恢复</button>
+    <button class="act-full plain" id="bkCancel" hidden>取消</button>
   </div>
 </div>
 
@@ -584,7 +618,7 @@
       <div class="drow"><div class="dnm">TV.log(m)</div>
         <div class="ddesc">写一行运行日志，列表里的「日志」能看到（<code>console</code> 不进日志）。</div></div>
       <div class="drow"><div class="dnm">TV.toast(m)</div>
-        <div class="ddesc">电视屏幕底部提示一句，两秒后消失。</div></div>
+        <div class="ddesc">设备屏幕底部提示一句，两秒后消失。</div></div>
     </div>
 
     <div class="sec"><b>用法：该用 pick 还是 wait</b></div>
@@ -669,11 +703,11 @@ if (ch != null) {
 
 <div class="mask" id="pinMask" hidden>
   <div class="sheet">
-    <div class="nav"><span></span><h2>配对电视</h2>
+    <div class="nav"><span></span><h2>配对设备</h2>
       <button class="lnk b" id="pinCancel">稍后</button></div>
     <div class="group"><div class="frow"><label>配对码</label>
       <input id="pinInput" inputmode="numeric" maxlength="4"></div></div>
-    <div class="hint">配对码显示在电视的「设置 → 配对二维码」页面里。</div>
+    <div class="hint">配对码显示在设备的「设置 → 配对二维码」页面里。</div>
     <button class="act-full pri" id="pinOk">确定</button>
   </div>
 </div>
@@ -1008,6 +1042,7 @@ if (ch != null) {
       show($('p-' + d.page));
       if (d.page === 'cache') loadCache();
       if (d.page === 'epg') loadEpg();
+      if (d.page === 'backup') loadBackup();
     } else if (d.dev != null) {
       // 开关先本地翻转一下，手感即时；服务端回包再由 renderDev 校回真实值
       var on = t.getAttribute('aria-checked') !== 'true';
@@ -1015,13 +1050,13 @@ if (ch != null) {
       act('dev.set', { name: d.dev, value: on }, on ? '已开启' : '已关闭');
     } else if (d.rk != null) {
       if (d.rk === 'close') {
-        if (!wsLive) { toast('还没连上电视', true); return; }
+        if (!wsLive) { toast('还没连上设备', true); return; }
         wsSend({ t: 'k', k: 'close' });
-        // 电视收了登录页，手机这边退回「网站登录」；长连接留着只会显示个假在线
+        // 设备收了登录页，手机这边退回「网站登录」；长连接留着只会显示个假在线
         closeWs();
         show($('p-login'));
         hide($('p-remote'));
-        toast('已关闭电视上的登录页');
+        toast('已关闭设备上的登录页');
       } else remoteKey(d.rk);
     } else if (d.zk != null) {
       remoteZoom(+d.zk);
@@ -1030,14 +1065,14 @@ if (ch != null) {
       openLog(d.log);
     } else if (d.play != null) {
       var p = findChannel(d.play);
-      if (p) act('play', { group: p.g, name: p.ch.name, url: p.ch.url, line: p.ch.line }, '电视已切台');
+      if (p) act('play', { group: p.g, name: p.ch.name, url: p.ch.url, line: p.ch.line }, '设备已切台');
     } else if (d.edit != null) {
       openEdit(findChannel(d.edit));
     } else if (d.lopen != null) {
-      // 电视进了登录页，手机紧接着就该拿起遥控：直接推到那一页并连上
+      // 设备进了登录页，手机紧接着就该拿起遥控：直接推到那一页并连上
       // 「网站登录」留在下面，遥控页返回时退回它
       api('login.open', { url: d.lopen }).then(handle).then(function () {
-        toast('电视正在打开登录页');
+        toast('设备正在打开登录页');
         resetDot();
         show($('p-remote'));
         openWs();
@@ -1056,6 +1091,117 @@ if (ch != null) {
       setFold(d.fold, now);
     }
   });
+
+  // ---------------- 备份与恢复 ----------------
+
+  // 已读进来的备份正文：空串表示还没选文件
+  var bkText = '';
+
+  /** 进页和恢复完都回到“还没选文件”的样子：预览收起，只剩选文件那个按钮 */
+  function bkReset() {
+    bkText = '';
+    $('bkFile').value = '';
+    $('bkBox').hidden = true;
+    $('bkGo').hidden = true;
+    $('bkCancel').hidden = true;
+    $('bkPick').hidden = false;
+    disarm($('bkGo'));
+  }
+
+  /** 进页时把页面复位到「还没选文件」，上一次选的文件不再留着 */
+  function loadBackup() {
+    bkReset();
+  }
+
+  /** 备份文件到底能不能用：返回空串表示能用，否则是给人看的原因 */
+  function bkProblem(o) {
+    if (!o || o.app !== 'InWeb') return '这不是本应用的备份文件';
+    if (!(o.version > 0)) return '备份文件版本不对';
+    // 光有 app/version 不算数：一份可恢复的备份至少得带着某一段内容
+    var has = ['groups', 'logins', 'scripts', 'epg', 'dev'].some(function (k) {
+      return o[k] != null;
+    });
+    if (!has) return '备份文件里没有可恢复的内容';
+    return '';
+  }
+
+  /** 备份里到底有多少东西：一律按文件内容算，不信文件名 */
+  function bkSummary(o) {
+    var chs = 0;
+    (o.groups || []).forEach(function (g) { chs += (g.channels || []).length; });
+    return (o.groups || []).length + ' 个分组 · ' + chs + ' 个频道 · ' +
+      (o.logins || []).length + ' 个登录网址 · ' +
+      ((o.scripts && o.scripts.items) || []).length + ' 段脚本 · ' +
+      ((o.epg && o.epg.sources) || []).length + ' 个节目源';
+  }
+
+  function bkFileName() {
+    var d = new Date(), p = function (n) { return ('0' + n).slice(-2); };
+    return 'inweb-backup-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+      '-' + p(d.getHours()) + p(d.getMinutes()) + '.json';
+  }
+
+  $('bkExport').onclick = function () {
+    fetch('api/backup', { headers: { 'X-Pin': pin() } })
+      .then(function (r) {
+        if (r.status === 401) { askPin(); return null; }
+        return r.text();
+      })
+      .then(function (txt) {
+        if (!txt) return;
+        // 页面里直接生成文件下载：设备这边不用有存储权限，手机上就是普通下载
+        var url = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
+        var a = document.createElement('a');
+        a.href = url; a.download = bkFileName();
+        document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 2000);
+        toast('已导出备份文件');
+      })
+      .catch(function () { toast('导出失败：连不上设备', true); });
+  };
+
+  $('bkPick').onclick = function () { $('bkFile').click(); };
+
+  $('bkCancel').onclick = function () { bkReset(); };
+
+  // 选完先读出来看一眼，不直接恢复：先知道要盖掉什么、盖进来什么
+  $('bkFile').onchange = function () {
+    var f = this.files && this.files[0];
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () {
+      var txt = String(rd.result || ''), o = null, problem = '这不是有效的 JSON 文件';
+      try { o = JSON.parse(txt); problem = bkProblem(o); } catch (e) {}
+      if (problem) {
+        bkReset();
+        toast(problem, true);
+        return;
+      }
+      bkText = txt;
+      $('bkWhen').textContent = o.exportedAt || '—';
+      $('bkFrom').textContent = (o.device || '未知设备') + ' · ' + f.name;
+      $('bkWhat').textContent = bkSummary(o);
+      $('bkBox').hidden = false;
+      $('bkPick').hidden = true;
+      $('bkGo').hidden = false;
+      $('bkCancel').hidden = false;
+      disarm($('bkGo'));
+    };
+    rd.readAsText(f);
+  };
+
+  $('bkGo').onclick = function () {
+    if (!bkText) return;
+    var self = this;
+    arm(self, '确认覆盖', function () {
+      self.disabled = true;
+      api('restore', { json: bkText }).then(handle).then(function (j) {
+        self.disabled = false;
+        toast('已恢复：' + (j.msg || '完成'));
+        loadBackup();
+      }).catch(function () { self.disabled = false; });
+    });
+  };
 
   // ---------------- 节目单 ----------------
 
@@ -1579,9 +1725,9 @@ if (ch != null) {
     });
   };
 
-  // ---------------- 电视遥控 ----------------
+  // ---------------- 设备遥控 ----------------
   // 一条常驻 WebSocket 送光标指令：触控板每帧都发消息，走「一次请求一个连接」的 HTTP
-  // 既来不及也跟不住。页面用 rAF 攒一拍（≈16ms）就发，本地光标点先动起来，不等电视回话。
+  // 既来不及也跟不住。页面用 rAF 攒一拍（≈16ms）就发，本地光标点先动起来，不等设备回话。
 
   var ws = null, wsLive = false, tvReady = false, padOpen = false;
   var pad = $('pad'), padDot = $('padDot');
@@ -1615,7 +1761,7 @@ if (ch != null) {
       var j = null;
       try { j = JSON.parse(ev.data); } catch (e) {}
       if (j && j.t === 'ready') { tvReady = !!j.v; renderRemote(); }
-      // 缩放读数只认电视回报：两边按的是同一份档位
+      // 缩放读数只认设备回报：两边按的是同一份档位
       if (j && j.t === 'z') $('rcZoom').textContent = (j.v || 100) + '%';
     };
     s.onclose = function () {
@@ -1641,7 +1787,7 @@ if (ch != null) {
     pad.classList.toggle('live', wsLive && tvReady);
     var off = !wsLive || !tvReady;
     $('padOff').hidden = !off;
-    $('padOff').textContent = wsLive ? '电视当前不在登录页' : '未连接电视';
+    $('padOff').textContent = wsLive ? '设备当前不在登录页' : '未连接设备';
     $('padTip').hidden = off;
     $('padTip').textContent = scrollMode ? TIP_SCROLL : TIP_MOUSE;
     $('padScroll').classList.toggle('on', scrollMode);
@@ -1781,16 +1927,16 @@ if (ch != null) {
     wsSend({ t: 'k', k: k });
   }
 
-  // 缩放发给电视，由电视算档位：电视上的按钮和这里的按钮按同一套步进，不会各算各的
+  // 缩放发给设备，由设备算档位：设备上的按钮和这里的按钮按同一套步进，不会各算各的
   function remoteZoom(d) {
     wsSend({ t: 'z', d: d });
   }
 
   $('rcSend').onclick = function () {
     var s = $('rcText').value;
-    if (!wsLive) { toast('还没连上电视', true); return; }
+    if (!wsLive) { toast('还没连上设备', true); return; }
     wsSend({ t: 'txt', s: s, r: true });
-    toast(s ? '已替换电视上聚焦的输入框' : '已清空电视上聚焦的输入框');
+    toast(s ? '已替换设备上聚焦的输入框' : '已清空设备上聚焦的输入框');
   };
   $('rcRe').onclick = function () { closeWs(); openWs(); };
   $('padScroll').onclick = function () {
@@ -1811,11 +1957,11 @@ if (ch != null) {
       apply(j);
       if (loud) toast('已刷新');
     }).catch(function () {
-      if (loud) toast('连不上电视：确认和电视在同一个网络', true);
+      if (loud) toast('连不上设备：确认和设备在同一个网络', true);
     });
   }
 
-  // 电视那边随时在切台，页面开着就跟着刷新；后台标签不打扰
+  // 设备那边随时在切台，页面开着就跟着刷新；后台标签不打扰
   setInterval(function () {
     if (pin() && document.visibilityState === 'visible') refresh(false);
   }, 6000);
