@@ -1,21 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 图标前景：一块圆角屏幕 + 正中白色播放三角。整体压在 108dp 的安全区里（中间 72dp），
+     TV 启动器裁成圆角/圆形都不会切到东西；纯矢量，任何分辨率都清晰，不用出各密度 PNG。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- 屏幕：白色描边，圆角比直角更耐看，也跟"网页播放器"的卡片感一致 -->
     <path
-        android:pathData="M44,38 L52,27 M64,38 L56,27"
-        android:strokeColor="#FFFFFF"
-        android:strokeLineCap="round"
-        android:strokeWidth="3" />
+        android:pathData="M35,31.5 h38 a10,10 0 0 1 10,10 v21 a10,10 0 0 1 -10,10 h-38 a10,10 0 0 1 -10,-10 v-21 a10,10 0 0 1 10,-10 z"
+        android:strokeColor="#F2F6FF"
+        android:strokeWidth="4.5" />
+    <!-- 播放三角：视觉中心比屏幕几何中心略偏右，看着才居中 -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M34,38 h40 a5,5 0 0 1 5,5 v20 a5,5 0 0 1 -5,5 h-40 a5,5 0 0 1 -5,-5 v-20 a5,5 0 0 1 5,-5 z" />
+        android:pathData="M47,42 L47,62 L65.5,52 Z" />
+    <!-- 底部两支脚，交代"电视机"，同时把重心压住 -->
     <path
-        android:fillColor="#0B1220"
-        android:pathData="M36,43 h36 v17 h-36 z" />
-    <path
-        android:fillColor="#FFD447"
-        android:pathData="M40,60 h28 v1.5 h-28 z" />
+        android:pathData="M40,80 h28"
+        android:strokeColor="#F2F6FF"
+        android:strokeLineCap="round"
+        android:strokeWidth="4.5" />
 </vector>
