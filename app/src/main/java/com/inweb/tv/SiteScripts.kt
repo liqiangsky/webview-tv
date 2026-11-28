@@ -1,4 +1,4 @@
-package com.tvlive.web
+package com.inweb.tv
 
 import android.content.Context
 import org.json.JSONArray

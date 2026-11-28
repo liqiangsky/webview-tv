@@ -1,4 +1,4 @@
-package com.tvlive.web
+package com.inweb.tv
 
 import android.app.AlarmManager
 import android.app.PendingIntent

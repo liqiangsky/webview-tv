@@ -1,4 +1,4 @@
-package com.tvlive.web
+package com.inweb.tv
 
 /**
  * 频道与分组：line 是频道在 channels.txt 里的行号，用作“正在播放”的稳定标识。

@@ -1,4 +1,4 @@
-package com.tvlive.web
+package com.inweb.tv
 
 import android.annotation.SuppressLint
 import android.app.Activity

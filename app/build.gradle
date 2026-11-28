@@ -9,10 +9,9 @@ def buildVersionName = (findProperty('versionName') ?: '1.0').toString()
 def buildVersionCode = (findProperty('versionCode') ?: '1').toString().toInteger()
 
 android {
-    // namespace 只是源码包名（Kotlin 的 package 跟它走），applicationId 才是应用身份：
-    // 它决定桌面图标认的是哪个应用、数据落在 /sdcard/Android/data/<applicationId>/、
-    // 以及覆盖安装时能不能接上前一个版本。两者可以不同，改 ID 不等于要搬源文件。
-    namespace 'com.tvlive.web'
+    // applicationId 是应用身份：决定桌面认哪个应用、数据落在 /sdcard/Android/data/<applicationId>/、
+    // 以及覆盖安装能否接上前一版。namespace 是源码包名（Kotlin package 跟它走），这里两者保持一致。
+    namespace 'com.inweb.tv'
     compileSdk 35
 
     defaultConfig {
